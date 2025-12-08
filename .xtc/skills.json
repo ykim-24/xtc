@@ -1,0 +1,72 @@
+[
+  {
+    "id": "emmaxnm58",
+    "name": "JavaScript",
+    "description": "JavaScript language",
+    "category": "language",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "file extensions"
+  },
+  {
+    "id": "6cp9l5hal",
+    "name": "TypeScript",
+    "description": "TypeScript language with static typing",
+    "category": "language",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  },
+  {
+    "id": "a49pn4l6h",
+    "name": "React",
+    "description": "React UI library",
+    "category": "framework",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  },
+  {
+    "id": "1hvf94ji8",
+    "name": "Zustand",
+    "description": "Zustand state management",
+    "category": "framework",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  },
+  {
+    "id": "63mb6ulb0",
+    "name": "Tailwind CSS",
+    "description": "Tailwind CSS utility-first styling",
+    "category": "tooling",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  },
+  {
+    "id": "gn34fmdkv",
+    "name": "Vite",
+    "description": "Vite build tool",
+    "category": "tooling",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  },
+  {
+    "id": "yj583242i",
+    "name": "Electron",
+    "description": "Electron desktop app",
+    "category": "deployment",
+    "isActive": false,
+    "isAutoDetected": true,
+    "confidence": "high",
+    "source": "package.json"
+  }
+]
