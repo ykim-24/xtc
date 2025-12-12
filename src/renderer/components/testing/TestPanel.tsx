@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { ChevronLeft } from 'lucide-react';
 import { useTestStore } from '@/stores/testStore';
 import { useProjectStore } from '@/stores';
 import { TestTree } from './TestTree';
@@ -80,11 +79,12 @@ export function TestPanel() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setSelectedFramework(null)}
-            className="p-1 -ml-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+            className="text-xs text-text-muted hover:text-text-primary transition-colors font-mono"
             title="Back to framework selection"
           >
-            <ChevronLeft className="w-4 h-4" />
+            [ back ]
           </button>
+          <span className="text-text-muted">/</span>
           <h2 className="text-sm font-medium text-text-primary">
             {selectedFramework ? frameworkNames[selectedFramework] : 'Tests'}
           </h2>

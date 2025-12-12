@@ -320,3 +320,5 @@ Project-specific settings stored in `.xtc/` directory:
 
 - [ ] Linear integration support
 - [ ] Explorer file organization (grouping, filtering)
+- [ ] Datadog integration for logs and dashboards
+- [ ] Start work flow with sub-issue branching (parent branch → sub-issue branches)

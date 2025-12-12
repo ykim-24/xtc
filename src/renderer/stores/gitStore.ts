@@ -95,6 +95,9 @@ interface GitState {
   clearOutput: () => void;
   addOutput: (command: string, output: string, isError?: boolean) => void;
   reset: () => void;
+
+  // Dev/testing
+  setIsFetching: (value: boolean) => void;
 }
 
 const initialState = {
@@ -507,4 +510,7 @@ ${diff}
   },
 
   reset: () => set(initialState),
+
+  // Dev/testing
+  setIsFetching: (value: boolean) => set({ isFetching: value }),
 }));

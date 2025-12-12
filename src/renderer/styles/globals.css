@@ -185,3 +185,70 @@ select, option, input, button, textarea {
 .hljs-regexp {
   color: #7ee787;
 }
+
+/* Worktree Node Animated Borders */
+
+/* Spinning blue border for running state */
+.worktree-node-running {
+  position: relative;
+  background: transparent;
+}
+
+.worktree-node-running::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 0.5rem;
+  background: conic-gradient(from var(--angle, 0deg), #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6);
+  animation: worktree-border-spin 2s linear infinite;
+  z-index: -1;
+}
+
+@keyframes worktree-border-spin {
+  to {
+    --angle: 360deg;
+  }
+}
+
+/* Use @property for smooth conic gradient animation */
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* Fallback spinning animation for browsers without @property support */
+@supports not (background: conic-gradient(from var(--angle), red, blue)) {
+  .worktree-node-running::before {
+    background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
+    background-size: 200% 100%;
+    animation: worktree-gradient-shift 1s linear infinite;
+  }
+
+  @keyframes worktree-gradient-shift {
+    from { background-position: 0% 50%; }
+    to { background-position: 200% 50%; }
+  }
+}
+
+/* Solid green border for success */
+.worktree-node-success {
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
+}
+
+/* Solid red border for error */
+.worktree-node-error {
+  border: 2px solid #ef4444;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+/* Default idle border */
+.worktree-node-idle {
+  border: 2px solid var(--color-border-primary, #374151);
+}
+
+/* Hover effect for nodes */
+.worktree-node-idle:hover {
+  border-color: var(--color-border-secondary, #4b5563);
+}

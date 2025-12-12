@@ -8,7 +8,6 @@ export function EditReview() {
   const {
     pendingEdits,
     isLoading,
-    fetchPendingEdits,
     approveEdit,
     rejectEdit,
     approveAll,
@@ -16,18 +15,6 @@ export function EditReview() {
   } = useEditsStore();
 
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
-
-  // Fetch pending edits on mount and listen for new ones
-  useEffect(() => {
-    fetchPendingEdits();
-
-    // Listen for new pending edits
-    const unsubscribe = window.electron?.claude.onPendingEditAdded((edit) => {
-      useEditsStore.getState().addPendingEdit(edit);
-    });
-
-    return unsubscribe;
-  }, [fetchPendingEdits]);
 
   // Auto-expand files when edits change
   useEffect(() => {

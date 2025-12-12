@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { X, Check, XIcon, ChevronRight, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw } from 'lucide-react';
-import { useSkillsStore, useRulesStore } from '@/stores';
+import { X, Check, XIcon, ChevronRight, ChevronLeft, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { useSkillsStore, useRulesStore, useChatStore } from '@/stores';
+import { useProjectStore } from '@/stores/projectStore';
 
 interface ReviewPanelProps {
   projectPath: string;
@@ -46,10 +47,15 @@ interface DiffLine {
 }
 
 interface SavedReview {
+  index: number;
   branch: string;
   baseBranch: string;
   timestamp: number;
   reviewData: FileReviewData[];
+}
+
+interface SavedReviewsStore {
+  reviews: SavedReview[];
 }
 
 type ViewMode = 'setup' | 'reviewing' | 'generating' | 'report';
@@ -109,13 +115,30 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
   const [selectedBaseBranch, setSelectedBaseBranch] = useState<string>('');
   const [baseBranchUsed, setBaseBranchUsed] = useState<string>('');
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
-  const [savedReview, setSavedReview] = useState<SavedReview | null>(null);
+  const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
+  const [currentReviewIndex, setCurrentReviewIndex] = useState<number | null>(null);
   const [loadingSavedReview, setLoadingSavedReview] = useState(true);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<{ batch: number; total: number; status: 'pending' | 'sending' | 'success' | 'failed' | 'rolling-back' }[]>([]);
   const [showBatchProgress, setShowBatchProgress] = useState(false);
+  const [hasOpenPR, setHasOpenPR] = useState(false);
+  const [showCreatePRModal, setShowCreatePRModal] = useState(false);
+  const [prTitle, setPrTitle] = useState('');
+  const [prBody, setPrBody] = useState('');
+  const [prBaseBranch, setPrBaseBranch] = useState('');
+  const [prTemplate, setPrTemplate] = useState<string | null>(null);
+  const [isCreatingPR, setIsCreatingPR] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
+  const [createPRError, setCreatePRError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchMatches, setSearchMatches] = useState<{ fileIndex: number; lineIndex: number }[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [existingPRComments, setExistingPRComments] = useState<Array<{ path: string; line: number; startLine?: number; body: string; user: string }>>([]);
+  const [loadingPRComments, setLoadingPRComments] = useState(true);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const diffRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const hasInitialized = useRef(false);
@@ -128,8 +151,10 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
 
   const { getActiveSkills, projectDescription } = useSkillsStore();
   const { getActiveRulesByServerity } = useRulesStore();
+  const { addMessage, setLoading, setStreamingMessageId, finishStreaming, setCurrentActivity, setResultStatus } = useChatStore();
+  const { setMode } = useProjectStore();
 
-  // Load available branches on mount
+  // Load available branches and PR comments on mount
   useEffect(() => {
     const loadBranches = async () => {
       const branchResult = await window.electron?.git.branch(projectPath);
@@ -148,39 +173,323 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
         setSelectedBaseBranch(defaultBranch);
       }
     };
+
+    const loadPRComments = async () => {
+      setLoadingPRComments(true);
+      try {
+        const result = await window.electron?.git.pr.comments(projectPath);
+        if (result?.success && result.reviewComments) {
+          setExistingPRComments(result.reviewComments.map(c => ({
+            path: c.path,
+            line: c.line,
+            startLine: c.startLine,
+            body: c.body,
+            user: c.user,
+          })));
+          setHasOpenPR(true);
+        } else {
+          setExistingPRComments([]);
+        }
+      } catch {
+        setExistingPRComments([]);
+      } finally {
+        setLoadingPRComments(false);
+      }
+    };
+
     loadBranches();
+    loadPRComments();
   }, [projectPath]);
 
-  // Load saved review on mount - auto-load and go to report if exists
+  // Handle Cmd+F / Ctrl+F for search
   useEffect(() => {
-    const loadSavedReview = async () => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setShowSearch(true);
+        setTimeout(() => searchInputRef.current?.focus(), 0);
+      }
+      if (e.key === 'Escape' && showSearch) {
+        setShowSearch(false);
+        setSearchQuery('');
+        setSearchMatches([]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSearch]);
+
+  // Find matches when search query changes
+  useEffect(() => {
+    if (!searchQuery.trim() || reviewData.length === 0) {
+      setSearchMatches([]);
+      setCurrentMatchIndex(0);
+      return;
+    }
+
+    const query = searchQuery.toLowerCase();
+    const matches: { fileIndex: number; lineIndex: number }[] = [];
+
+    reviewData.forEach((file, fileIndex) => {
+      const lines = parseDiff(file.diff);
+      lines.forEach((line, lineIndex) => {
+        if (line.content.toLowerCase().includes(query)) {
+          matches.push({ fileIndex, lineIndex });
+        }
+      });
+    });
+
+    setSearchMatches(matches);
+    setCurrentMatchIndex(0);
+
+    // Navigate to first match
+    if (matches.length > 0) {
+      setSelectedFileIndex(matches[0].fileIndex);
+    }
+  }, [searchQuery, reviewData]);
+
+  // Navigate to current match
+  const navigateToMatch = (index: number) => {
+    if (searchMatches.length === 0) return;
+    const match = searchMatches[index];
+    setSelectedFileIndex(match.fileIndex);
+    // Scroll to the line
+    setTimeout(() => {
+      const lineEl = diffRef.current?.querySelector(`[data-line-index="${match.lineIndex}"]`);
+      lineEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+  };
+
+  const handleSearchNext = () => {
+    if (searchMatches.length === 0) return;
+    const nextIndex = (currentMatchIndex + 1) % searchMatches.length;
+    setCurrentMatchIndex(nextIndex);
+    navigateToMatch(nextIndex);
+  };
+
+  const handleSearchPrev = () => {
+    if (searchMatches.length === 0) return;
+    const prevIndex = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length;
+    setCurrentMatchIndex(prevIndex);
+    navigateToMatch(prevIndex);
+  };
+
+  // Open PR creation modal
+  const openCreatePRModal = async () => {
+    setShowCreatePRModal(true);
+    setCreatePRError(null);
+
+    // Auto-generate title from branch name
+    const branchTitle = branch
+      .replace(/[-_]/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/^\w/, c => c.toUpperCase());
+    setPrTitle(branchTitle);
+
+    // Get default branch and strip remote prefixes
+    const defaultBranchResult = await window.electron?.git.defaultBranch(projectPath);
+    if (defaultBranchResult?.branch) {
+      const cleanBranch = defaultBranchResult.branch
+        .replace(/^origin\//, '')
+        .replace(/^remotes\/origin\//, '')
+        .replace(/^remotes\//, '');
+      setPrBaseBranch(cleanBranch);
+    }
+
+    // Generate description from review summary
+    const summary = generatePRDescription();
+
+    // Load PR template
+    const templateResult = await window.electron?.git.pr.template(projectPath);
+    if (templateResult?.template) {
+      setPrTemplate(templateResult.template);
+      // Fill in template sections intelligently
+      let filledTemplate = templateResult.template;
+
+      // Find and fill the Description section
+      // Look for <!-- comment --> after ## Description and replace it, or insert after the header
+      const descriptionMatch = filledTemplate.match(/(## Description\s*\n)(<!--[\s\S]*?-->)?(\s*\n)?/i);
+      if (descriptionMatch) {
+        const [fullMatch, header] = descriptionMatch;
+        filledTemplate = filledTemplate.replace(fullMatch, `${header}\n${summary}\n\n`);
+      } else {
+        // No Description section found, prepend our summary
+        filledTemplate = summary + '\n\n---\n\n' + filledTemplate;
+      }
+
+      // Try to auto-check Type of Change based on branch name
+      const branchLower = branch.toLowerCase();
+      if (branchLower.includes('fix') || branchLower.includes('bug')) {
+        filledTemplate = filledTemplate.replace('- [ ] Bug fix', '- [x] Bug fix');
+      } else if (branchLower.includes('feat') || branchLower.includes('add')) {
+        filledTemplate = filledTemplate.replace('- [ ] New feature', '- [x] New feature');
+      } else if (branchLower.includes('refactor')) {
+        filledTemplate = filledTemplate.replace('- [ ] Code refactor', '- [x] Code refactor');
+      } else if (branchLower.includes('doc')) {
+        filledTemplate = filledTemplate.replace('- [ ] Documentation update', '- [x] Documentation update');
+      } else if (branchLower.includes('perf')) {
+        filledTemplate = filledTemplate.replace('- [ ] Performance improvement', '- [x] Performance improvement');
+      }
+
+      setPrBody(filledTemplate);
+    } else {
+      setPrBody(summary);
+    }
+  };
+
+  // Generate PR description from review data
+  const generatePRDescription = () => {
+    if (reviewData.length === 0) return '';
+
+    let description = '## Changes\n\n';
+    description += `This PR includes changes to ${reviewData.length} file(s):\n\n`;
+
+    reviewData.forEach(file => {
+      const icon = file.status === 'added' ? '➕' : file.status === 'deleted' ? '🗑️' : '✏️';
+      description += `- ${icon} \`${file.path}\``;
+      if (file.summary) {
+        description += `: ${file.summary}`;
+      }
+      description += '\n';
+    });
+
+    const allComments = reviewData.flatMap(f => f.comments);
+    const issues = allComments.filter(c => c.type === 'issue');
+    const highlights = allComments.filter(c => c.type === 'highlight');
+
+    if (issues.length > 0 || highlights.length > 0) {
+      description += '\n## Review Notes\n\n';
+      if (highlights.length > 0) {
+        description += `✅ ${highlights.length} highlight(s)\n`;
+      }
+      if (issues.length > 0) {
+        const errors = issues.filter(c => c.severity === 'error').length;
+        const warnings = issues.filter(c => c.severity === 'warning').length;
+        const suggestions = issues.filter(c => c.severity === 'suggestion').length;
+        if (errors > 0) description += `❌ ${errors} error(s)\n`;
+        if (warnings > 0) description += `⚠️ ${warnings} warning(s)\n`;
+        if (suggestions > 0) description += `💡 ${suggestions} suggestion(s)\n`;
+      }
+    }
+
+    return description;
+  };
+
+  // Handle push and create PR
+  const handleCreatePR = async () => {
+    if (!prTitle.trim() || !prBaseBranch.trim()) return;
+
+    setIsCreatingPR(true);
+    setCreatePRError(null);
+
+    try {
+      // First push the branch
+      setIsPushing(true);
+      const pushResult = await window.electron?.git.push(projectPath, branch);
+      setIsPushing(false);
+
+      if (!pushResult?.success) {
+        setCreatePRError(pushResult?.error || 'Failed to push branch');
+        setIsCreatingPR(false);
+        return;
+      }
+
+      // Create the PR - strip remote prefixes from base branch
+      const cleanBaseBranch = prBaseBranch
+        .replace(/^origin\//, '')
+        .replace(/^remotes\/origin\//, '')
+        .replace(/^remotes\//, '');
+
+      const prResult = await window.electron?.git.pr.create(projectPath, {
+        title: prTitle,
+        body: prBody,
+        base: cleanBaseBranch,
+      });
+
+      if (prResult?.success && prResult.url) {
+        // PR created successfully
+        setHasOpenPR(true);
+        setShowCreatePRModal(false);
+        // Open PR in browser
+        window.electron?.openExternal(prResult.url);
+      } else {
+        setCreatePRError(prResult?.error || 'Failed to create PR');
+      }
+    } catch (err) {
+      setCreatePRError(err instanceof Error ? err.message : 'Failed to create PR');
+    } finally {
+      setIsCreatingPR(false);
+      setIsPushing(false);
+    }
+  };
+
+  // Scroll to a specific line range in the diff view
+  const scrollToLine = (startLine: number | null, endLine?: number | null) => {
+    if (startLine === null) return;
+    const end = endLine ?? startLine;
+    setTimeout(() => {
+      const container = diffRef.current;
+      if (!container) return;
+
+      // Find all lines in the range
+      const linesToHighlight: Element[] = [];
+      for (let line = startLine; line <= end; line++) {
+        const lineEl = container.querySelector(`[data-line="${line}"]`);
+        if (lineEl) linesToHighlight.push(lineEl);
+      }
+
+      if (linesToHighlight.length === 0) return;
+
+      // Scroll to the first line
+      linesToHighlight[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Clear previous highlights
+      container.querySelectorAll('[data-highlighted="true"]').forEach((el) => {
+        (el as HTMLElement).style.backgroundColor = '';
+        el.removeAttribute('data-highlighted');
+      });
+
+      // Highlight all lines with background
+      linesToHighlight.forEach((el) => {
+        (el as HTMLElement).style.backgroundColor = 'rgba(139, 92, 246, 0.3)';
+        el.setAttribute('data-highlighted', 'true');
+      });
+    }, 100);
+  };
+
+  // Load saved reviews on mount - auto-load most recent and go to report if exists
+  useEffect(() => {
+    const loadSavedReviews = async () => {
       setLoadingSavedReview(true);
-      console.log('[ReviewPanel] Loading saved review for key:', reviewStorageKey);
+      console.log('[ReviewPanel] Loading saved reviews for key:', reviewStorageKey);
       try {
         if (!window.electron?.store) {
           console.error('[ReviewPanel] Store API not available');
           setLoadingSavedReview(false);
           return;
         }
-        const result = await window.electron.store.get<SavedReview>(reviewStorageKey);
+        const result = await window.electron.store.get<SavedReviewsStore>(reviewStorageKey);
         console.log('[ReviewPanel] Store get result:', result);
-        if (result?.success && result.data) {
-          console.log('[ReviewPanel] Found saved review, loading...');
-          setSavedReview(result.data);
-          // Auto-load saved review and go directly to report
-          setReviewData(result.data.reviewData);
-          setBaseBranchUsed(result.data.baseBranch);
+        if (result?.success && result.data && result.data.reviews && result.data.reviews.length > 0) {
+          console.log('[ReviewPanel] Found saved reviews, loading latest...');
+          const reviews = result.data.reviews;
+          setSavedReviews(reviews);
+          // Auto-load the most recent review (highest index)
+          const latestReview = reviews[reviews.length - 1];
+          setCurrentReviewIndex(latestReview.index);
+          setReviewData(latestReview.reviewData);
+          setBaseBranchUsed(latestReview.baseBranch);
           setViewMode('report');
         } else {
-          console.log('[ReviewPanel] No saved review found or load failed');
+          console.log('[ReviewPanel] No saved reviews found or load failed');
         }
       } catch (e) {
-        console.error('[ReviewPanel] Failed to load saved review:', e);
+        console.error('[ReviewPanel] Failed to load saved reviews:', e);
       } finally {
         setLoadingSavedReview(false);
       }
     };
-    loadSavedReview();
+    loadSavedReviews();
   }, [reviewStorageKey]);
 
   // Calculate detailed progress percentage
@@ -283,21 +592,41 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
       addLog('info', 'fetching changed files...');
       let diffResult = await window.electron?.git.prDiffFiles(projectPath);
 
-      if (!diffResult?.success) {
-        // Check if the error is about a merged/closed PR
-        if (diffResult?.error?.includes('merged') || diffResult?.error?.includes('closed')) {
-          addLog('error', diffResult.error);
-          addLog('info', 'cannot review a merged or closed PR');
-          addLog('info', 'closing review in 3 seconds...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          onClose();
-          return;
-        }
-        // No PR found or other error - fall back to local git diff
-        addLog('info', 'no open PR found, using local diff...');
-        diffResult = await window.electron?.git.diffFiles(projectPath, selectedBaseBranch || undefined);
-      } else {
+      // Store PR comments for later use
+      let existingPRComments: Map<string, Array<{ line: number; startLine?: number; body: string; user: string; createdAt: string }>> = new Map();
+
+      if (diffResult?.success) {
+        // Have an open PR - can submit review to GitHub
+        setHasOpenPR(true);
         addLog('info', `using GitHub PR diff (${diffResult.base})`);
+
+        // Fetch existing PR comments
+        addLog('info', 'fetching existing PR comments...');
+        const prCommentsResult = await window.electron?.git.pr.comments(projectPath);
+        if (prCommentsResult?.success && prCommentsResult.reviewComments) {
+          // Group review comments by file path
+          for (const comment of prCommentsResult.reviewComments) {
+            if (!existingPRComments.has(comment.path)) {
+              existingPRComments.set(comment.path, []);
+            }
+            existingPRComments.get(comment.path)!.push({
+              line: comment.line,
+              startLine: comment.startLine,
+              body: comment.body,
+              user: comment.user,
+              createdAt: comment.createdAt,
+            });
+          }
+          const totalComments = prCommentsResult.reviewComments.length;
+          if (totalComments > 0) {
+            addLog('info', `found ${totalComments} existing PR comment${totalComments > 1 ? 's' : ''}`);
+          }
+        }
+      } else {
+        // No open PR - fall back to local git diff (can still review, just can't submit to GitHub)
+        setHasOpenPR(false);
+        addLog('info', 'no open PR, using local diff...');
+        diffResult = await window.electron?.git.diffFiles(projectPath, selectedBaseBranch || undefined);
       }
 
       if (!diffResult?.success || !diffResult.files.length) {
@@ -437,6 +766,25 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
             addLog('success', 'looks good, no specific feedback', 1);
           }
 
+          // Add existing PR comments for this file
+          const existingFileComments = existingPRComments.get(file.path) || [];
+          if (existingFileComments.length > 0) {
+            addLog('info', `${existingFileComments.length} existing PR comment${existingFileComments.length > 1 ? 's' : ''}`, 1);
+            for (const prComment of existingFileComments) {
+              const lineInfo = prComment.line ? (prComment.startLine && prComment.startLine !== prComment.line ? `:${prComment.startLine}-${prComment.line}` : `:${prComment.line}`) : '';
+              addLog('info', `[@${prComment.user}${lineInfo}] ${prComment.body.slice(0, 60)}${prComment.body.length > 60 ? '...' : ''}`, 2);
+              comments.push({
+                id: `pr-${file.path}-${comments.length}`,
+                type: 'user',
+                startLine: prComment.startLine || prComment.line,
+                endLine: prComment.line,
+                message: `[@${prComment.user}] ${prComment.body}`,
+                status: 'approved', // Existing PR comments are already submitted
+                author: 'user'
+              });
+            }
+          }
+
           // Show Claude's verdict and summary
           const verdict = reviewResult.review.verdict || 'concern'; // default to concern if not provided
           const verdictIcon = verdict === 'approve' ? '✓' : verdict === 'block' ? '✗' : '~';
@@ -483,18 +831,24 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
       // Store the review data
       setReviewData(allReviewData);
 
-      // Save review to storage
+      // Save review to storage with incrementing index
+      const nextIndex = savedReviews.length > 0
+        ? Math.max(...savedReviews.map(r => r.index)) + 1
+        : 1;
       const savedData: SavedReview = {
+        index: nextIndex,
         branch,
         baseBranch: selectedBaseBranch,
         timestamp: Date.now(),
         reviewData: allReviewData
       };
-      console.log('[ReviewPanel] Saving review with key:', reviewStorageKey);
+      const updatedReviews = [...savedReviews, savedData];
+      console.log('[ReviewPanel] Saving review with key:', reviewStorageKey, 'index:', nextIndex);
       console.log('[ReviewPanel] Review data to save:', savedData);
-      const saveResult = await window.electron?.store.set(reviewStorageKey, savedData);
+      const saveResult = await window.electron?.store.set(reviewStorageKey, { reviews: updatedReviews });
       console.log('[ReviewPanel] Save result:', saveResult);
-      setSavedReview(savedData);
+      setSavedReviews(updatedReviews);
+      setCurrentReviewIndex(nextIndex);
 
       // Brief delay to show generating state
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -506,27 +860,78 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
     runReview();
   };
 
-  // Load a saved review directly into report view
-  const loadSavedReviewData = () => {
-    if (!savedReview) return;
-    setReviewData(savedReview.reviewData);
-    setBaseBranchUsed(savedReview.baseBranch);
+  // Load a saved review by index directly into report view
+  const loadSavedReviewByIndex = (index: number) => {
+    const review = savedReviews.find(r => r.index === index);
+    if (!review) return;
+    setCurrentReviewIndex(index);
+    setReviewData(review.reviewData);
+    setBaseBranchUsed(review.baseBranch);
     setViewMode('report');
   };
 
-  // Regenerate review - clear saved and go to setup
-  const handleRegenerate = async () => {
-    // Clear saved review from storage
-    await window.electron?.store.delete(reviewStorageKey);
-    setSavedReview(null);
-    // Reset state
+  // Navigate to previous review
+  const goToPreviousReview = () => {
+    if (currentReviewIndex === null) return;
+    const currentIdx = savedReviews.findIndex(r => r.index === currentReviewIndex);
+    if (currentIdx > 0) {
+      loadSavedReviewByIndex(savedReviews[currentIdx - 1].index);
+    }
+  };
+
+  // Navigate to next review
+  const goToNextReview = () => {
+    if (currentReviewIndex === null) return;
+    const currentIdx = savedReviews.findIndex(r => r.index === currentReviewIndex);
+    if (currentIdx < savedReviews.length - 1) {
+      loadSavedReviewByIndex(savedReviews[currentIdx + 1].index);
+    }
+  };
+
+  // Delete a specific review
+  const deleteReview = async (index: number) => {
+    const updatedReviews = savedReviews.filter(r => r.index !== index);
+    await window.electron?.store.set(reviewStorageKey, { reviews: updatedReviews });
+    setSavedReviews(updatedReviews);
+
+    // If we deleted the current review, navigate to another or go to setup
+    if (currentReviewIndex === index) {
+      if (updatedReviews.length > 0) {
+        // Load the latest remaining review
+        const latest = updatedReviews[updatedReviews.length - 1];
+        loadSavedReviewByIndex(latest.index);
+      } else {
+        // No reviews left, go to setup
+        setCurrentReviewIndex(null);
+        setReviewData([]);
+        setViewMode('setup');
+      }
+    }
+  };
+
+  // Start new review (keep history)
+  const handleRegenerate = () => {
+    console.log('[ReviewPanel] handleRegenerate called, current viewMode:', viewMode);
+    // Reset state but keep saved reviews
     setReviewData([]);
     setLogs([]);
     setFilesReviewed(0);
     setTotalFiles(0);
     setCurrentStep(0);
+    setCurrentReviewIndex(null);
+    // Reset initialization flag so startReview can run again
     hasInitialized.current = false;
     // Go to setup
+    console.log('[ReviewPanel] Setting viewMode to setup');
+    setViewMode('setup');
+  };
+
+  // Delete all reviews
+  const deleteAllReviews = async () => {
+    await window.electron?.store.delete(reviewStorageKey);
+    setSavedReviews([]);
+    setCurrentReviewIndex(null);
+    setReviewData([]);
     setViewMode('setup');
   };
 
@@ -1001,43 +1406,66 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
               </p>
             </div>
 
-            {/* Saved Review Section */}
-            {!loadingSavedReview && savedReview && (
+            {/* Saved Reviews Section */}
+            {!loadingSavedReview && savedReviews.length > 0 && (
               <div className="bg-bg-secondary border border-border-primary rounded-lg p-4 space-y-3">
-                <div className="flex items-center gap-2 text-text-secondary">
-                  <Clock className="w-4 h-4" />
-                  <span className="text-sm font-medium">Saved Review Found</span>
-                </div>
-                <div className="text-xs text-text-muted space-y-1">
-                  <p>
-                    Compared against: <span className="font-mono text-text-secondary">{savedReview.baseBranch}</span>
-                  </p>
-                  <p>
-                    Generated: <span className="text-text-secondary">{new Date(savedReview.timestamp).toLocaleString()}</span>
-                  </p>
-                  <p>
-                    Files reviewed: <span className="text-text-secondary">{savedReview.reviewData.length}</span>
-                  </p>
-                </div>
-                <div className="flex gap-2 pt-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-text-secondary">
+                    <Clock className="w-4 h-4" />
+                    <span className="text-sm font-medium">
+                      {savedReviews.length} Saved Review{savedReviews.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
                   <button
-                    onClick={loadSavedReviewData}
+                    onClick={deleteAllReviews}
+                    className="text-xs font-mono text-red-400/60 hover:text-red-400 transition-colors"
+                  >
+                    clear all
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {savedReviews.slice().reverse().map((review) => (
+                    <div
+                      key={review.index}
+                      className="flex items-center justify-between p-2 rounded bg-bg-primary hover:bg-bg-hover transition-colors group"
+                    >
+                      <button
+                        onClick={() => loadSavedReviewByIndex(review.index)}
+                        className="flex-1 text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-accent-primary">#{review.index}</span>
+                          <span className="text-xs text-text-muted">
+                            {new Date(review.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="text-xs text-text-muted mt-0.5">
+                          vs {review.baseBranch} · {review.reviewData.length} files
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => deleteReview(review.index)}
+                        className="p-1 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        title="Delete this review"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 pt-2 border-t border-border-primary">
+                  <button
+                    onClick={() => loadSavedReviewByIndex(savedReviews[savedReviews.length - 1].index)}
                     className="flex-1 flex items-center justify-center gap-1 text-xs font-mono bg-accent-primary/20 text-accent-primary hover:bg-accent-primary/30 px-3 py-2 rounded transition-colors"
                   >
-                    <CheckCircle className="w-3 h-3" /> load saved
-                  </button>
-                  <button
-                    onClick={() => setSavedReview(null)}
-                    className="flex items-center justify-center gap-1 text-xs font-mono text-text-muted hover:text-text-primary px-3 py-2 rounded transition-colors"
-                  >
-                    <RefreshCw className="w-3 h-3" /> new review
+                    <CheckCircle className="w-3 h-3" /> view latest
                   </button>
                 </div>
               </div>
             )}
 
-            {/* New Review Section - shown when no saved review or user chose to create new */}
-            {!loadingSavedReview && !savedReview && (
+            {/* New Review Section - always shown in setup view */}
+            {!loadingSavedReview && (
               <>
                 <div className="space-y-3">
                   <label className="block text-xs font-medium text-text-muted">
@@ -1109,13 +1537,46 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
 
   const highlightedCodeLines = getHighlightedCodeLines();
 
+  // Get current position in review history
+  const currentReviewPosition = currentReviewIndex !== null
+    ? savedReviews.findIndex(r => r.index === currentReviewIndex)
+    : -1;
+  const hasPreviousReview = currentReviewPosition > 0;
+  const hasNextReview = currentReviewPosition >= 0 && currentReviewPosition < savedReviews.length - 1;
+
   // Report View
   if (viewMode === 'report') {
     return (
       <div className="flex flex-col h-full bg-bg-primary">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border-primary bg-bg-secondary">
-          <span className="text-xs font-mono text-text-muted">
+          <span className="text-xs font-mono text-text-muted flex items-center gap-2">
+            {/* Review navigation */}
+            {savedReviews.length > 1 && (
+              <span className="flex items-center gap-1 mr-2">
+                <button
+                  onClick={goToPreviousReview}
+                  disabled={!hasPreviousReview}
+                  className="p-0.5 hover:text-accent-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Previous review"
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                </button>
+                <span className="text-accent-primary">#{currentReviewIndex}</span>
+                <span className="text-text-muted">/ {savedReviews.length}</span>
+                <button
+                  onClick={goToNextReview}
+                  disabled={!hasNextReview}
+                  className="p-0.5 hover:text-accent-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Next review"
+                >
+                  <ChevronRight className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+            {savedReviews.length === 1 && currentReviewIndex && (
+              <span className="text-accent-primary mr-2">#{currentReviewIndex}</span>
+            )}
             review: <span className="text-accent-primary">{branch}</span>
             <span className="text-text-muted"> vs </span>
             <span className="text-text-secondary">{baseBranchUsed}</span>
@@ -1126,12 +1587,21 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
             </span>
           </span>
           <div className="flex items-center gap-2">
+            {currentReviewIndex !== null && (
+              <button
+                onClick={() => deleteReview(currentReviewIndex)}
+                className="text-xs font-mono text-text-muted hover:text-red-400 transition-colors"
+                title="Delete this review"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
             <button
               onClick={handleRegenerate}
               className="text-xs font-mono text-text-muted hover:text-accent-primary transition-colors"
-              title="Regenerate review"
+              title="Create new review"
             >
-              [ regen ]
+              [ new ]
             </button>
             <button
               onClick={onClose}
@@ -1183,6 +1653,7 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                         onClick={() => {
                           setSelectedCommentId(comment.id);
                           setSelectedFileIndex(comment.fileIndex);
+                          scrollToLine(comment.startLine, comment.endLine);
                         }}
                         className={`flex-shrink-0 px-3 py-2 flex items-center gap-1.5 border-b-2 transition-colors ${
                           isSelected
@@ -1427,8 +1898,23 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                     const verdictIcon = file.verdict === 'approve' ? '✓' : file.verdict === 'block' ? '✗' : '~';
                     const verdictColor = file.verdict === 'approve' ? 'text-green-400' :
                                         file.verdict === 'block' ? 'text-red-400' : 'text-yellow-400';
+                    const isSelected = selectedFileIndex === idx;
                     return (
-                      <div key={idx} className="bg-[#161b22] rounded p-3">
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          setSelectedFileIndex(idx);
+                          setSelectedCommentId(null);
+                          // Scroll to first comment line if any, otherwise scroll to top
+                          const firstComment = file.comments[0];
+                          if (firstComment?.startLine) {
+                            scrollToLine(firstComment.startLine, firstComment.endLine);
+                          }
+                        }}
+                        className={`bg-[#161b22] rounded p-3 cursor-pointer transition-colors ${
+                          isSelected ? 'ring-1 ring-accent-primary' : 'hover:bg-[#1c2128]'
+                        }`}
+                      >
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`text-xs font-bold ${verdictColor}`} title={file.verdict}>
                             {verdictIcon}
@@ -1479,6 +1965,57 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                   </div>
                 </div>
 
+                {/* Search Bar */}
+                {showSearch && (
+                  <div className="px-4 py-2 border-b border-border-primary bg-[#161b22] flex items-center gap-2">
+                    <Search className="w-4 h-4 text-text-muted" />
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.shiftKey ? handleSearchPrev() : handleSearchNext();
+                        }
+                      }}
+                      placeholder="Search in diff..."
+                      className="flex-1 bg-bg-primary border border-border-primary rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-primary"
+                      autoFocus
+                    />
+                    <span className="text-xs text-text-muted">
+                      {searchMatches.length > 0 ? `${currentMatchIndex + 1}/${searchMatches.length}` : 'No matches'}
+                    </span>
+                    <button
+                      onClick={handleSearchPrev}
+                      disabled={searchMatches.length === 0}
+                      className="p-1 text-text-muted hover:text-text-primary disabled:opacity-30"
+                      title="Previous (Shift+Enter)"
+                    >
+                      <ChevronRight className="w-4 h-4 rotate-180" />
+                    </button>
+                    <button
+                      onClick={handleSearchNext}
+                      disabled={searchMatches.length === 0}
+                      className="p-1 text-text-muted hover:text-text-primary disabled:opacity-30"
+                      title="Next (Enter)"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSearch(false);
+                        setSearchQuery('');
+                        setSearchMatches([]);
+                      }}
+                      className="p-1 text-text-muted hover:text-text-primary"
+                      title="Close (Esc)"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Full Diff View */}
                 <div
                   ref={diffRef}
@@ -1490,11 +2027,49 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                     // Create a stable key based on the file path and line position
                     const stableKey = `${displayFile.path}-${lineIndex}`;
 
+                    // Check if this line is a search match
+                    const isSearchMatch = searchQuery && searchMatches.some(
+                      m => m.fileIndex === selectedFileIndex && m.lineIndex === lineIndex
+                    );
+                    const isCurrentMatch = searchQuery && searchMatches[currentMatchIndex]?.fileIndex === selectedFileIndex
+                      && searchMatches[currentMatchIndex]?.lineIndex === lineIndex;
+
+                    // Highlight search matches in content
+                    const renderContent = () => {
+                      if (!searchQuery || !line.content.toLowerCase().includes(searchQuery.toLowerCase())) {
+                        return line.content;
+                      }
+                      const parts: React.ReactNode[] = [];
+                      let lastIndex = 0;
+                      const lowerContent = line.content.toLowerCase();
+                      const lowerQuery = searchQuery.toLowerCase();
+                      let matchIndex = lowerContent.indexOf(lowerQuery);
+                      let partKey = 0;
+                      while (matchIndex !== -1) {
+                        if (matchIndex > lastIndex) {
+                          parts.push(<span key={partKey++}>{line.content.slice(lastIndex, matchIndex)}</span>);
+                        }
+                        parts.push(
+                          <span key={partKey++} className={`${isCurrentMatch ? 'bg-yellow-400 text-black' : 'bg-yellow-400/50 text-black'} rounded px-0.5`}>
+                            {line.content.slice(matchIndex, matchIndex + searchQuery.length)}
+                          </span>
+                        );
+                        lastIndex = matchIndex + searchQuery.length;
+                        matchIndex = lowerContent.indexOf(lowerQuery, lastIndex);
+                      }
+                      if (lastIndex < line.content.length) {
+                        parts.push(<span key={partKey++}>{line.content.slice(lastIndex)}</span>);
+                      }
+                      return parts;
+                    };
+
                     return (
                       <div
                         key={stableKey}
                         data-line={lineNum}
+                        data-line-index={lineIndex}
                         className={`flex items-stretch border-l-2 ${
+                          isCurrentMatch ? 'bg-yellow-500/20 border-yellow-400' :
                           highlighted ? 'bg-accent-primary/30 border-accent-primary' :
                           line.type === 'addition' ? 'bg-green-500/10 border-transparent' :
                           line.type === 'deletion' ? 'bg-red-500/10 border-transparent' :
@@ -1521,7 +2096,7 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                           <pre className={`flex-1 py-0.5 pr-4 whitespace-pre ${
                             line.type === 'header' ? 'text-blue-400' : 'text-text-primary'
                           }`}>
-                            {line.content}
+                            {renderContent()}
                           </pre>
                         </div>
                       </div>
@@ -1542,31 +2117,24 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-muted font-mono">
               {pendingCount === 0 ? 'all comments reviewed' : `${pendingCount} pending review`}
+              {!hasOpenPR && <span className="ml-2 text-yellow-500">(local review - no PR)</span>}
             </span>
             <div className="flex items-center gap-3">
-              {/* TEST BUTTON - Remove after testing */}
-              <button
-                onClick={() => {
-                  setShowConfirmModal(true);
-                  setShowBatchProgress(true);
-                  // Simulate 8 batches with animation
-                  const total = 8;
-                  setBatchProgress(Array.from({ length: total }, (_, i) => ({
-                    batch: i + 1,
-                    total,
-                    status: i < 2 ? 'success' : i === 2 ? 'sending' : 'pending' as const
-                  })));
-                }}
-                className="text-xs font-mono text-yellow-400 hover:text-yellow-300 transition-colors"
-              >
-                [ test UI ]
-              </button>
-              <button
-                onClick={() => setShowConfirmModal(true)}
-                className="text-xs font-mono text-green-400 hover:text-green-300 transition-colors"
-              >
-                [ submit review ]
-              </button>
+              {hasOpenPR ? (
+                <button
+                  onClick={() => setShowConfirmModal(true)}
+                  className="text-xs font-mono text-green-400 hover:text-green-300 transition-colors"
+                >
+                  [ submit review ]
+                </button>
+              ) : (
+                <button
+                  onClick={openCreatePRModal}
+                  className="text-xs font-mono text-accent-primary hover:text-accent-primary/80 transition-colors"
+                >
+                  [ push & create PR ]
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1829,6 +2397,103 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                     </button>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create PR Modal */}
+        {showCreatePRModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+            <div className="bg-bg-secondary border border-border-primary rounded-lg shadow-xl w-full max-w-lg mx-4">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
+                <h3 className="text-sm font-medium text-text-primary">
+                  Push & Create Pull Request
+                </h3>
+                <button
+                  onClick={() => setShowCreatePRModal(false)}
+                  className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-4 space-y-4">
+                {/* Branch info */}
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <GitBranch className="w-4 h-4" />
+                  <span className="font-mono text-accent-primary">{branch}</span>
+                  <span>→</span>
+                  <span className="font-mono text-text-primary">{prBaseBranch || 'main'}</span>
+                </div>
+
+                {/* Title */}
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={prTitle}
+                    onChange={(e) => setPrTitle(e.target.value)}
+                    className="w-full bg-bg-primary border border-border-primary rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                    placeholder="PR title..."
+                  />
+                </div>
+
+                {/* Base branch */}
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Base branch</label>
+                  <input
+                    type="text"
+                    value={prBaseBranch}
+                    onChange={(e) => setPrBaseBranch(e.target.value)}
+                    className="w-full bg-bg-primary border border-border-primary rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                    placeholder="main"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">
+                    Description
+                    {prTemplate && <span className="text-accent-primary ml-1">(template loaded)</span>}
+                  </label>
+                  <textarea
+                    value={prBody}
+                    onChange={(e) => setPrBody(e.target.value)}
+                    className="w-full bg-bg-primary border border-border-primary rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-primary h-48 font-mono resize-none"
+                    placeholder="Describe your changes..."
+                  />
+                </div>
+
+                {/* Error */}
+                {createPRError && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded p-3">
+                    <div className="flex items-center gap-2 text-red-400 text-xs">
+                      <AlertCircle className="w-4 h-4" />
+                      <span>{createPRError}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-primary bg-bg-primary/50">
+                <button
+                  onClick={() => setShowCreatePRModal(false)}
+                  disabled={isCreatingPR}
+                  className="text-xs font-mono text-text-muted hover:text-text-primary px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                >
+                  [ cancel ]
+                </button>
+                <button
+                  onClick={handleCreatePR}
+                  disabled={isCreatingPR || !prTitle.trim() || !prBaseBranch.trim()}
+                  className="text-xs font-mono text-accent-primary hover:text-accent-primary/80 bg-accent-primary/10 hover:bg-accent-primary/20 px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                >
+                  {isCreatingPR ? (isPushing ? '[ pushing... ]' : '[ creating PR... ]') : '[ push & create PR ]'}
+                </button>
               </div>
             </div>
           </div>

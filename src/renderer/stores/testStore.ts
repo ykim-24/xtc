@@ -40,7 +40,7 @@ export interface TestSummary {
   duration: number;
 }
 
-type AppMode = 'home' | 'tests' | 'git';
+type AppMode = 'home' | 'tests' | 'git' | 'linear' | 'worktrees';
 
 interface TestState {
   // App mode

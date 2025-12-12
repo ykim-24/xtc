@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Plus, X, TerminalIcon } from 'lucide-react';
 import { Panel, IconButton } from '@/components/ui';
 import { useProjectStore } from '@/stores';
@@ -62,6 +63,13 @@ export function TerminalPanel() {
 
     const fitAddon = new FitAddon();
     xterm.loadAddon(fitAddon);
+
+    // Add web links support (cmd+click to open URLs)
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      // Open link in default browser
+      window.electron?.openExternal?.(uri);
+    });
+    xterm.loadAddon(webLinksAddon);
 
     // Handle input - capture terminalId in closure
     xterm.onData((data) => {

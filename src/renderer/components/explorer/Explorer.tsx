@@ -3,6 +3,8 @@ import { FolderOpen, FolderPlus, FilePlus, ChevronsDownUp, RefreshCw, ExternalLi
 import { Panel, IconButton, ContextMenu, useContextMenu, ContextMenuItem } from '@/components/ui';
 import { FileTreeItem } from './FileTreeItem';
 import { useProjectStore, useSkillsStore, useRulesStore, useInteractionLogStore, ProjectFile } from '@/stores';
+import { loadLastProjectPath } from '@/stores/projectStore';
+import { restoreSession, setupAutoSave, setupSleepHandler } from '@/services/sessionManager';
 
 // File extension to language mapping
 const FILE_EXTENSIONS_TO_LANGUAGE: Record<string, string> = {
@@ -114,6 +116,34 @@ export function Explorer() {
     }, 300);
   }, [projectPath, loadDirectory, setFileTree]);
 
+  // Track if session has been restored for the current project to avoid re-restoring on remount
+  const sessionRestoredForRef = useRef<string | null>(null);
+
+  // On startup, load the last opened project
+  const hasLoadedRef = useRef(false);
+  useEffect(() => {
+    const loadStartupProject = async () => {
+      // Only load once on mount, and only if no project is set
+      if (hasLoadedRef.current || projectPath) return;
+      hasLoadedRef.current = true;
+
+      const lastPath = await loadLastProjectPath();
+      if (lastPath) {
+        // Verify the directory still exists
+        try {
+          const result = await window.electron?.readDir(lastPath);
+          if (result?.success) {
+            setProjectPath(lastPath);
+          }
+        } catch {
+          // Directory no longer exists, ignore
+        }
+      }
+    };
+
+    loadStartupProject();
+  }, [projectPath, setProjectPath]);
+
   // Load directory tree when project path changes
   useEffect(() => {
     if (!projectPath) return;
@@ -131,10 +161,30 @@ export function Explorer() {
         loadRules(),
         loadLogs(),
       ]);
+
+      // Restore session state only if it hasn't been restored for this project yet
+      // This prevents re-restoring when Explorer remounts due to mode switching
+      if (sessionRestoredForRef.current !== projectPath) {
+        sessionRestoredForRef.current = projectPath;
+        await restoreSession(projectPath);
+      }
     };
 
     loadTree();
   }, [projectPath, loadDirectory, setFileTree, loadSkills, loadRules, loadLogs, clearSkills, clearRules]);
+
+  // Set up session auto-save and sleep handlers
+  useEffect(() => {
+    if (!projectPath) return;
+
+    const cleanupAutoSave = setupAutoSave(projectPath);
+    const cleanupSleepHandler = setupSleepHandler(projectPath);
+
+    return () => {
+      cleanupAutoSave();
+      cleanupSleepHandler();
+    };
+  }, [projectPath]);
 
   // Set up file watcher when project path changes
   useEffect(() => {
@@ -174,6 +224,10 @@ export function Explorer() {
         loadRules(),
         loadLogs(),
       ]);
+
+      // Restore session state for the new project
+      sessionRestoredForRef.current = path;
+      await restoreSession(path);
     }
   };
 
@@ -215,17 +269,34 @@ export function Explorer() {
       setSelectedPaths(new Set([filePath]));
       setLastSelectedPath(filePath);
 
-      // Open file in editor (only on single click without modifiers)
-      const result = await window.electron?.readFile(filePath);
-      if (result?.success && result.content !== undefined) {
+      // Check if it's an image file
+      const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp', '.avif'];
+      const ext = filePath.toLowerCase().slice(filePath.lastIndexOf('.'));
+      const isImage = imageExtensions.includes(ext);
+
+      if (isImage) {
+        // For images, just open without reading content
         const fileName = filePath.split('/').pop() || 'untitled';
         openFile({
           path: filePath,
           name: fileName,
-          content: result.content,
-          language: getLanguageFromPath(filePath),
+          content: '', // Images don't need content
+          language: 'image',
           isDirty: false,
         });
+      } else {
+        // Open file in editor (only on single click without modifiers)
+        const result = await window.electron?.readFile(filePath);
+        if (result?.success && result.content !== undefined) {
+          const fileName = filePath.split('/').pop() || 'untitled';
+          openFile({
+            path: filePath,
+            name: fileName,
+            content: result.content,
+            language: getLanguageFromPath(filePath),
+            isDirty: false,
+          });
+        }
       }
     }
   };
@@ -555,7 +626,7 @@ export function Explorer() {
             ))}
           </div>
           {/* Empty space area for context menu */}
-          <div className="explorer-empty-area flex-1 min-h-[100px]" />
+          <div className="explorer-empty-area flex-1 min-h-[50px]" />
 
           {emptySpaceContextMenu.isOpen && (
             <ContextMenu

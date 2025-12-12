@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, session, shell, powerMonitor } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { watch, FSWatcher } from 'fs';
@@ -9,6 +9,17 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { IGNORED_PATHS } from '../shared/constants/index.js';
 import { lspManager } from './lspManager.js';
+import {
+  gitLogger,
+  claudeLogger,
+  fileLogger,
+  terminalLogger,
+  lspLogger,
+  testLogger,
+  windowLogger,
+  systemLogger,
+  storeLogger,
+} from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,28 +113,43 @@ app.on('activate', () => {
   }
 });
 
+// Power management - notify renderer before system sleep
+powerMonitor.on('suspend', () => {
+  // System is about to sleep - tell renderer to save state
+  mainWindow?.webContents.send('system:sleep');
+});
+
+powerMonitor.on('resume', () => {
+  // System woke up - tell renderer
+  mainWindow?.webContents.send('system:wake');
+});
+
 // IPC Handlers
 
 // Window controls
 ipcMain.on('window:minimize', () => {
+  windowLogger.debug('Minimizing window');
   mainWindow?.minimize();
 });
 
 ipcMain.on('window:maximize', () => {
   if (process.platform === 'darwin') {
-    // macOS: use true fullscreen mode
-    mainWindow?.setFullScreen(!mainWindow.isFullScreen());
+    const isFullScreen = mainWindow?.isFullScreen();
+    windowLogger.debug(`Toggling fullscreen: ${!isFullScreen}`);
+    mainWindow?.setFullScreen(!isFullScreen);
   } else {
-    // Windows/Linux: use maximize
     if (mainWindow?.isMaximized()) {
+      windowLogger.debug('Unmaximizing window');
       mainWindow.unmaximize();
     } else {
+      windowLogger.debug('Maximizing window');
       mainWindow?.maximize();
     }
   }
 });
 
 ipcMain.on('window:close', () => {
+  windowLogger.debug('Closing window');
   mainWindow?.close();
 });
 
@@ -186,22 +212,36 @@ async function addToGitExclude(projectPath: string) {
   }
 }
 
+// Shell operations
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  try {
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // File operations
 ipcMain.handle('dialog:openFolder', async () => {
+  fileLogger.start('Opening folder dialog');
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openDirectory'],
   });
 
   if (!result.canceled && result.filePaths[0]) {
+    fileLogger.success('Folder selected', result.filePaths[0]);
     // Automatically add XTC files to git exclude
     await addToGitExclude(result.filePaths[0]);
     return result.filePaths[0];
   }
 
+  fileLogger.debug('Folder dialog cancelled');
   return null;
 });
 
 ipcMain.handle('dialog:openFile', async (_event, options?: { multiple?: boolean; filters?: { name: string; extensions: string[] }[] }) => {
+  fileLogger.start('Opening file dialog', { multiple: options?.multiple });
   const properties: ('openFile' | 'multiSelections')[] = ['openFile'];
   if (options?.multiple) properties.push('multiSelections');
 
@@ -210,31 +250,60 @@ ipcMain.handle('dialog:openFile', async (_event, options?: { multiple?: boolean;
     filters: options?.filters,
   });
 
-  return result.canceled ? null : { filePaths: result.filePaths };
+  if (result.canceled) {
+    fileLogger.debug('File dialog cancelled');
+    return null;
+  }
+  fileLogger.success('Files selected', { count: result.filePaths.length });
+  return { filePaths: result.filePaths };
 });
 
 ipcMain.handle('file:read', async (_, filePath: string) => {
+  const fileName = path.basename(filePath);
+  fileLogger.debug(`Reading file: ${fileName}`);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
+    fileLogger.success(`Read file: ${fileName}`, { size: content.length });
     return { success: true, content };
   } catch (error) {
+    fileLogger.error(`Failed to read: ${fileName}`, error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('file:readImage', async (_, filePath: string) => {
+  const fileName = path.basename(filePath);
+  fileLogger.debug(`Reading image: ${fileName}`);
+  try {
+    const buffer = await fs.readFile(filePath);
+    const base64 = buffer.toString('base64');
+    fileLogger.success(`Read image: ${fileName}`, { size: buffer.length });
+    return { success: true, data: base64 };
+  } catch (error) {
+    fileLogger.error(`Failed to read image: ${fileName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:write', async (_, filePath: string, content: string) => {
+  const fileName = path.basename(filePath);
+  fileLogger.debug(`Writing file: ${fileName}`, { size: content.length });
   try {
     // Ensure parent directory exists
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
+    fileLogger.success(`Wrote file: ${fileName}`);
     return { success: true };
   } catch (error) {
+    fileLogger.error(`Failed to write: ${fileName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:readDir', async (_, dirPath: string) => {
+  const dirName = path.basename(dirPath);
+  fileLogger.debug(`Reading directory: ${dirName}`);
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const items = entries
@@ -251,40 +320,56 @@ ipcMain.handle('file:readDir', async (_, dirPath: string) => {
         }
         return a.name.localeCompare(b.name);
       });
+    fileLogger.success(`Read directory: ${dirName}`, { items: items.length });
     return { success: true, items };
   } catch (error) {
+    fileLogger.error(`Failed to read directory: ${dirName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:delete', async (_, filePath: string) => {
+  const fileName = path.basename(filePath);
+  fileLogger.debug(`Deleting: ${fileName}`);
   try {
     const stat = await fs.stat(filePath);
     if (stat.isDirectory()) {
       await fs.rm(filePath, { recursive: true });
+      fileLogger.success(`Deleted directory: ${fileName}`);
     } else {
       await fs.unlink(filePath);
+      fileLogger.success(`Deleted file: ${fileName}`);
     }
     return { success: true };
   } catch (error) {
+    fileLogger.error(`Failed to delete: ${fileName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:rename', async (_, oldPath: string, newPath: string) => {
+  const oldName = path.basename(oldPath);
+  const newName = path.basename(newPath);
+  fileLogger.debug(`Renaming: ${oldName} → ${newName}`);
   try {
     await fs.rename(oldPath, newPath);
+    fileLogger.success(`Renamed: ${oldName} → ${newName}`);
     return { success: true };
   } catch (error) {
+    fileLogger.error(`Failed to rename: ${oldName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:revealInFinder', (_, filePath: string) => {
+  const fileName = path.basename(filePath);
+  fileLogger.debug(`Revealing in Finder: ${fileName}`);
   try {
     shell.showItemInFolder(filePath);
+    fileLogger.success(`Revealed: ${fileName}`);
     return { success: true };
   } catch (error) {
+    fileLogger.error(`Failed to reveal: ${fileName}`, error);
     return { success: false, error: String(error) };
   }
 });
@@ -341,26 +426,33 @@ let fileWatcher: FSWatcher | null = null;
 ipcMain.handle('file:watch', (_, dirPath: string) => {
   // Clean up existing watcher
   if (fileWatcher) {
+    fileLogger.debug('Closing previous file watcher');
     fileWatcher.close();
     fileWatcher = null;
   }
 
   if (!dirPath) return { success: true };
 
+  const dirName = path.basename(dirPath);
+  fileLogger.start(`Watching directory: ${dirName}`);
   try {
     fileWatcher = watch(dirPath, { recursive: true }, (eventType, filename) => {
       if (filename && !IGNORED_PATHS.some(ignored => filename.includes(ignored))) {
+        fileLogger.debug(`File ${eventType}: ${filename}`);
         mainWindow?.webContents.send('file:changed', { eventType, filename, dirPath });
       }
     });
+    fileLogger.success(`Watching: ${dirName}`);
     return { success: true };
   } catch (error) {
+    fileLogger.error(`Failed to watch: ${dirName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('file:unwatch', () => {
   if (fileWatcher) {
+    fileLogger.debug('Stopped watching directory');
     fileWatcher.close();
     fileWatcher = null;
   }
@@ -371,48 +463,661 @@ ipcMain.handle('file:unwatch', () => {
 const getDataPath = () => path.join(app.getPath('userData'), 'data');
 
 ipcMain.handle('store:get', async (_, key: string) => {
+  storeLogger.debug(`Getting store key: ${key}`);
   try {
     const dataPath = getDataPath();
     const filePath = path.join(dataPath, `${key}.json`);
     const content = await fs.readFile(filePath, 'utf-8');
+    storeLogger.success(`Got store key: ${key}`);
     return { success: true, data: JSON.parse(content) };
   } catch (error) {
     // Return null if file doesn't exist (not an error)
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      storeLogger.debug(`Store key not found: ${key}`);
       return { success: true, data: null };
     }
+    storeLogger.error(`Failed to get store key: ${key}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('store:set', async (_, key: string, data: unknown) => {
+  storeLogger.debug(`Setting store key: ${key}`);
   try {
     const dataPath = getDataPath();
     await fs.mkdir(dataPath, { recursive: true });
     const filePath = path.join(dataPath, `${key}.json`);
     await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    storeLogger.success(`Set store key: ${key}`);
     return { success: true };
   } catch (error) {
+    storeLogger.error(`Failed to set store key: ${key}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('store:delete', async (_, key: string) => {
+  storeLogger.debug(`Deleting store key: ${key}`);
   try {
     const dataPath = getDataPath();
     const filePath = path.join(dataPath, `${key}.json`);
     await fs.unlink(filePath);
+    storeLogger.success(`Deleted store key: ${key}`);
     return { success: true };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      storeLogger.debug(`Store key already deleted: ${key}`);
       return { success: true }; // Already doesn't exist
     }
+    storeLogger.error(`Failed to delete store key: ${key}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('store:getPath', () => {
   return app.getPath('userData');
+});
+
+// Linear API
+ipcMain.handle('linear:test', async (_, apiKey: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `{ viewer { id name email } }`,
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: { viewer?: { id: string; name: string; email: string } };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Authentication failed' };
+    }
+
+    if (data.data?.viewer) {
+      return { success: true, user: data.data.viewer };
+    }
+
+    return { success: false, error: 'Unexpected response' };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+ipcMain.handle('linear:getMyIssues', async (_, apiKey: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `{
+          viewer {
+            assignedIssues(
+              filter: { state: { type: { nin: ["completed", "canceled"] } } }
+              orderBy: updatedAt
+            ) {
+              nodes {
+                id
+                identifier
+                title
+                description
+                priority
+                state {
+                  id
+                  name
+                  color
+                  type
+                }
+                labels {
+                  nodes {
+                    id
+                    name
+                    color
+                  }
+                }
+                project {
+                  id
+                  name
+                  color
+                }
+                createdAt
+                updatedAt
+              }
+            }
+          }
+        }`,
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        viewer?: {
+          assignedIssues?: {
+            nodes: Array<{
+              id: string;
+              identifier: string;
+              title: string;
+              description?: string;
+              priority: number;
+              state: { id: string; name: string; color: string; type: string };
+              labels: { nodes: Array<{ id: string; name: string; color: string }> };
+              project?: { id: string; name: string; color: string };
+              createdAt: string;
+              updatedAt: string;
+            }>;
+          };
+        };
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to fetch issues' };
+    }
+
+    if (data.data?.viewer?.assignedIssues) {
+      return { success: true, issues: data.data.viewer.assignedIssues.nodes };
+    }
+
+    return { success: false, error: 'Unexpected response' };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+ipcMain.handle('linear:getIssue', async (_, apiKey: string, issueId: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `query GetIssue($id: String!) {
+          issue(id: $id) {
+            id
+            identifier
+            title
+            description
+            priority
+            estimate
+            dueDate
+            url
+            branchName
+            state {
+              id
+              name
+              color
+              type
+            }
+            labels {
+              nodes {
+                id
+                name
+                color
+              }
+            }
+            project {
+              id
+              name
+              color
+            }
+            assignee {
+              id
+              name
+              email
+              avatarUrl
+            }
+            creator {
+              id
+              name
+              email
+            }
+            comments(first: 100) {
+              nodes {
+                id
+                body
+                createdAt
+                updatedAt
+                user {
+                  id
+                  name
+                  email
+                  avatarUrl
+                }
+              }
+            }
+            attachments {
+              nodes {
+                id
+                title
+                url
+                sourceType
+              }
+            }
+            parent {
+              id
+              identifier
+              title
+            }
+            children {
+              nodes {
+                id
+                identifier
+                title
+                state {
+                  name
+                  color
+                }
+              }
+            }
+            createdAt
+            updatedAt
+          }
+        }`,
+        variables: { id: issueId },
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        issue?: LinearIssueDetail;
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to fetch issue' };
+    }
+
+    if (data.data?.issue) {
+      return { success: true, issue: data.data.issue };
+    }
+
+    return { success: false, error: 'Issue not found' };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+// Type for detailed issue
+interface LinearIssueDetail {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string;
+  priority: number;
+  estimate?: number;
+  dueDate?: string;
+  url: string;
+  branchName?: string;
+  state: { id: string; name: string; color: string; type: string };
+  labels: { nodes: Array<{ id: string; name: string; color: string }> };
+  project?: { id: string; name: string; color: string };
+  assignee?: { id: string; name: string; email: string; avatarUrl?: string };
+  creator?: { id: string; name: string; email: string };
+  comments: { nodes: Array<{ id: string; body: string; createdAt: string; updatedAt: string; user: { id: string; name: string; email: string; avatarUrl?: string } }> };
+  attachments: { nodes: Array<{ id: string; title: string; url: string; sourceType: string }> };
+  parent?: { id: string; identifier: string; title: string };
+  children: { nodes: Array<{ id: string; identifier: string; title: string; state: { name: string; color: string } }> };
+  createdAt: string;
+  updatedAt: string;
+}
+
+ipcMain.handle('linear:createComment', async (_, apiKey: string, issueId: string, body: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `mutation CreateComment($issueId: String!, $body: String!) {
+          commentCreate(input: { issueId: $issueId, body: $body }) {
+            success
+            comment {
+              id
+              body
+              createdAt
+              user {
+                id
+                name
+                email
+              }
+            }
+          }
+        }`,
+        variables: { issueId, body },
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        commentCreate?: {
+          success: boolean;
+          comment?: {
+            id: string;
+            body: string;
+            createdAt: string;
+            user: { id: string; name: string; email: string };
+          };
+        };
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to create comment' };
+    }
+
+    if (data.data?.commentCreate?.success && data.data.commentCreate.comment) {
+      return { success: true, comment: data.data.commentCreate.comment };
+    }
+
+    return { success: false, error: 'Failed to create comment' };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+ipcMain.handle('linear:deleteComment', async (_, apiKey: string, commentId: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `mutation DeleteComment($commentId: String!) {
+          commentDelete(id: $commentId) {
+            success
+          }
+        }`,
+        variables: { commentId },
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        commentDelete?: {
+          success: boolean;
+        };
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to delete comment' };
+    }
+
+    return { success: data.data?.commentDelete?.success || false };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+ipcMain.handle('linear:getIssueStates', async (_, apiKey: string, issueId: string) => {
+  try {
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `query GetIssueStates($issueId: String!) {
+          issue(id: $issueId) {
+            team {
+              states {
+                nodes {
+                  id
+                  name
+                  color
+                  type
+                  position
+                }
+              }
+            }
+          }
+        }`,
+        variables: { issueId },
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        issue?: {
+          team?: {
+            states?: {
+              nodes: Array<{ id: string; name: string; color: string; type: string; position: number }>;
+            };
+          };
+        };
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to get states' };
+    }
+
+    const states = data.data?.issue?.team?.states?.nodes || [];
+    // Sort by position
+    states.sort((a, b) => a.position - b.position);
+
+    return { success: true, states };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+ipcMain.handle('linear:updateIssue', async (_, apiKey: string, issueId: string, updates: { stateId?: string; stateName?: string }) => {
+  try {
+    // If stateName is provided, we need to find the state ID first
+    let stateId = updates.stateId;
+
+    if (updates.stateName && !stateId) {
+      // Get the issue's team to find available states
+      const issueResponse = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey,
+        },
+        body: JSON.stringify({
+          query: `query GetIssueTeam($issueId: String!) {
+            issue(id: $issueId) {
+              team {
+                id
+                states {
+                  nodes {
+                    id
+                    name
+                    type
+                  }
+                }
+              }
+            }
+          }`,
+          variables: { issueId },
+        }),
+      });
+
+      const issueData = await issueResponse.json() as {
+        data?: {
+          issue?: {
+            team?: {
+              states?: {
+                nodes: Array<{ id: string; name: string; type: string }>;
+              };
+            };
+          };
+        };
+      };
+
+      const states = issueData.data?.issue?.team?.states?.nodes || [];
+      // Find state by name (case-insensitive) or by type
+      const targetState = states.find(s =>
+        s.name.toLowerCase() === updates.stateName?.toLowerCase() ||
+        s.type.toLowerCase() === updates.stateName?.toLowerCase()
+      );
+
+      if (targetState) {
+        stateId = targetState.id;
+      }
+    }
+
+    if (!stateId) {
+      return { success: false, error: 'Could not find state' };
+    }
+
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({
+        query: `mutation UpdateIssue($issueId: String!, $stateId: String!) {
+          issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+            success
+            issue {
+              id
+              state {
+                id
+                name
+              }
+            }
+          }
+        }`,
+        variables: { issueId, stateId },
+      }),
+    });
+
+    const data = await response.json() as {
+      errors?: { message: string }[];
+      data?: {
+        issueUpdate?: {
+          success: boolean;
+          issue?: {
+            id: string;
+            state: { id: string; name: string };
+          };
+        };
+      };
+    };
+
+    if (data.errors) {
+      return { success: false, error: data.errors[0]?.message || 'Failed to update issue' };
+    }
+
+    if (data.data?.issueUpdate?.success) {
+      return { success: true, issue: data.data.issueUpdate.issue };
+    }
+
+    return { success: false, error: 'Failed to update issue' };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+  }
+});
+
+// Linear Issue Summary Generation
+interface SummaryCache {
+  [key: string]: {
+    summary: string;
+    commentCount: number;
+    generatedAt: number;
+  };
+}
+
+const summaryCache: SummaryCache = {};
+
+ipcMain.handle('linear:generateSummary', async (_, issueData: {
+  identifier: string;
+  title: string;
+  description?: string;
+  comments: Array<{ body: string; user: { name: string }; createdAt: string }>;
+}) => {
+  const cacheKey = issueData.identifier;
+  const commentCount = issueData.comments.length;
+
+  // Check cache - if same comment count, return cached summary
+  if (summaryCache[cacheKey] && summaryCache[cacheKey].commentCount === commentCount) {
+    return { success: true, summary: summaryCache[cacheKey].summary, cached: true };
+  }
+
+  // Build context for summary
+  const commentsText = issueData.comments
+    .map(c => `${c.user.name} (${new Date(c.createdAt).toLocaleDateString()}): ${c.body}`)
+    .join('\n\n');
+
+  const prompt = `Summarize this Linear issue concisely in 2-3 sentences. Focus on the current status, key decisions, and any blockers. Output ONLY the summary, no preamble.
+
+Title: ${issueData.title}
+
+Description:
+${issueData.description || 'No description'}
+
+Comments (${commentCount}):
+${commentsText || 'No comments'}`;
+
+  return new Promise((resolve) => {
+    const args = ['--print', '--dangerously-skip-permissions'];
+
+    const claude = spawn('claude', args, {
+      env: getEnvWithPath(),
+      shell: true,
+    });
+
+    let responseText = '';
+    let errorText = '';
+
+    claude.stdin.write(prompt);
+    claude.stdin.end();
+
+    claude.stdout.on('data', (data: Buffer) => {
+      responseText += data.toString();
+    });
+
+    claude.stderr.on('data', (data: Buffer) => {
+      errorText += data.toString();
+    });
+
+    claude.on('error', (err) => {
+      resolve({ success: false, error: `Claude CLI error: ${err.message}` });
+    });
+
+    claude.on('close', (code) => {
+      if (code !== 0) {
+        resolve({ success: false, error: errorText || 'Claude CLI failed' });
+        return;
+      }
+
+      const summary = responseText.trim();
+
+      // Cache the result
+      summaryCache[cacheKey] = {
+        summary,
+        commentCount,
+        generatedAt: Date.now(),
+      };
+
+      resolve({ success: true, summary, cached: false });
+    });
+  });
 });
 
 // Claude CLI Chat
@@ -481,8 +1186,41 @@ async function getOriginalContent(cwd: string, filePath: string): Promise<string
   }
 }
 
+// Helper: Get file content hash for change detection
+async function getFileContentHash(filePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    // Simple hash: length + first/last 100 chars
+    return `${content.length}:${content.slice(0, 100)}:${content.slice(-100)}`;
+  } catch {
+    return null;
+  }
+}
+
+// Helper: Snapshot current state of files for comparison
+async function snapshotFileState(projectPath: string): Promise<Map<string, string | null>> {
+  const snapshot = new Map<string, string | null>();
+
+  if (!await isGitRepo(projectPath)) {
+    return snapshot;
+  }
+
+  const changes = await getGitChanges(projectPath);
+
+  for (const change of changes) {
+    const fullPath = path.join(projectPath, change.file);
+    const hash = await getFileContentHash(fullPath);
+    snapshot.set(change.file, hash);
+  }
+
+  return snapshot;
+}
+
 // Helper: Detect changes and create pending edits
-async function detectChangesAndCreateEdits(projectPath: string): Promise<PendingEdit[]> {
+async function detectChangesAndCreateEdits(
+  projectPath: string,
+  beforeSnapshot: Map<string, string | null>
+): Promise<PendingEdit[]> {
   const edits: PendingEdit[] = [];
 
   if (!await isGitRepo(projectPath)) {
@@ -496,13 +1234,22 @@ async function detectChangesAndCreateEdits(projectPath: string): Promise<Pending
     const isNewFile = change.status === '??' || change.status === 'A';
 
     try {
+      // Get current content hash
+      const currentHash = await getFileContentHash(fullPath);
+      const previousHash = beforeSnapshot.get(change.file);
+
+      // Skip if file existed before with same content (no change from Claude)
+      if (previousHash !== undefined && previousHash === currentHash) {
+        continue;
+      }
+
       // Get current content
       const newContent = await fs.readFile(fullPath, 'utf-8');
 
-      // Get original content (empty string for new files)
+      // Get original content (empty string for new files, or from git HEAD)
       const originalContent = isNewFile ? '' : (await getOriginalContent(projectPath, change.file) || '');
 
-      // Only create edit if content actually changed
+      // Only create edit if content actually changed from git HEAD
       if (newContent !== originalContent) {
         edits.push({
           id: crypto.randomUUID(),
@@ -521,13 +1268,31 @@ async function detectChangesAndCreateEdits(projectPath: string): Promise<Pending
   return edits;
 }
 
-// Track conversation state per project
-const conversationState: Map<string, boolean> = new Map();
+// Track conversations started in THIS app session only (not shared with other Claude instances)
+// Resets when app restarts, so we don't pick up stale conversations from Cursor/terminal/etc
+const appSessionConversations: Set<string> = new Set();
 
-ipcMain.handle('claude:send', async (_event, message: string, context: { activeFile?: { path: string; content: string }; contextFiles?: { path: string; content: string }[] }, projectPath: string | null) => {
-  return new Promise((resolve) => {
+interface ClaudeSendOptions {
+  planOnly?: boolean; // Restrict to read-only tools (for planning phase)
+}
+
+ipcMain.handle('claude:send', async (_event, message: string, context: { activeFile?: { path: string; content: string }; contextFiles?: { path: string; content: string }[] }, projectPath: string | null, options?: ClaudeSendOptions) => {
+  return new Promise(async (resolve) => {
     const projectKey = projectPath || '__global__';
-    const hasActiveConversation = conversationState.get(projectKey) || false;
+    const canContinue = appSessionConversations.has(projectKey);
+    const planOnly = options?.planOnly ?? false;
+
+    // Snapshot file state BEFORE Claude runs to detect only new changes
+    // Skip snapshot in planOnly mode since no changes should be made
+    const beforeSnapshot = (!planOnly && projectPath) ? await snapshotFileState(projectPath) : new Map();
+
+    claudeLogger.start('Sending message to Claude', {
+      messageLength: message.length,
+      hasActiveFile: !!context.activeFile,
+      contextFiles: context.contextFiles?.length || 0,
+      continuing: canContinue,
+      planOnly,
+    });
 
     // Build the prompt with context (rules/skills are now in CLAUDE.md, read by Claude CLI)
     let fullPrompt = '';
@@ -547,13 +1312,23 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
     fullPrompt += message;
 
     // Use spawn with --output-format stream-json to get structured output with tool activity
-    // Use --dangerously-skip-permissions to allow Claude to execute all tools
-    // Use --continue for subsequent messages in the same project
+    // Use --continue only for conversations started in THIS app session (not from Cursor/terminal/etc)
     // --print for non-interactive mode, --verbose required for stream-json format
-    const args = ['--print', '--dangerously-skip-permissions', '--verbose', '--output-format', 'stream-json'];
-    if (hasActiveConversation) {
+    const args = ['--print', '--verbose', '--output-format', 'stream-json'];
+
+    if (planOnly) {
+      // Plan-only mode: restrict to read-only tools (no Write, Edit, Bash, NotebookEdit)
+      args.push('--allowedTools', 'Read,Glob,Grep,Task,WebFetch,WebSearch,TodoWrite,mcp__*');
+    } else {
+      // Full mode: allow all tools
+      args.push('--dangerously-skip-permissions');
+    }
+
+    if (canContinue) {
       args.push('--continue');
     }
+
+    claudeLogger.command('claude', args);
 
     const claude = spawn('claude', args, {
       env: getEnvWithPath(),
@@ -685,34 +1460,49 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
     let stderr = '';
     claude.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
-      console.log('[Claude stderr]:', data.toString());
+      claudeLogger.warn('stderr', data.toString().trim());
     });
 
     claude.on('error', (err) => {
-      console.error('Claude spawn error:', err);
+      claudeLogger.error('Spawn error', err);
       resolve({ success: false, error: err.message });
     });
 
     claude.on('close', async (code) => {
-      console.log('[Claude] closed with code:', code, 'response length:', responseText.length);
+      claudeLogger.end('Claude response', { code, responseLength: responseText.length });
 
       if (code === 0 || responseText.length > 0) {
-        // Mark conversation as active for this project
-        conversationState.set(projectKey, true);
+        // Mark this project as having an active conversation in THIS app session
+        appSessionConversations.add(projectKey);
 
         // Detect file changes and create pending edits for review
         if (projectPath) {
           try {
-            const newEdits = await detectChangesAndCreateEdits(projectPath);
+            const newEdits = await detectChangesAndCreateEdits(projectPath, beforeSnapshot);
             if (newEdits.length > 0) {
-              pendingEdits = [...pendingEdits, ...newEdits];
-              // Notify renderer of new pending edits
-              for (const edit of newEdits) {
-                mainWindow?.webContents.send('claude:pendingEditAdded', edit);
+              claudeLogger.info('Detected pending edits', { count: newEdits.length });
+
+              // Update existing edits for the same file or add new ones
+              for (const newEdit of newEdits) {
+                const existingIndex = pendingEdits.findIndex(e => e.filePath === newEdit.filePath);
+                if (existingIndex !== -1) {
+                  // Update existing edit with new content (user provided feedback)
+                  pendingEdits[existingIndex] = {
+                    ...pendingEdits[existingIndex],
+                    newContent: newEdit.newContent,
+                    description: newEdit.description,
+                  };
+                  claudeLogger.debug('Updated existing pending edit', { filePath: newEdit.filePath });
+                  mainWindow?.webContents.send('claude:pendingEditUpdated', pendingEdits[existingIndex]);
+                } else {
+                  // Add new edit
+                  pendingEdits.push(newEdit);
+                  mainWindow?.webContents.send('claude:pendingEditAdded', newEdit);
+                }
               }
             }
           } catch (err) {
-            console.error('Failed to detect changes:', err);
+            claudeLogger.error('Failed to detect changes', err);
           }
         }
 
@@ -734,15 +1524,19 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
 });
 
 ipcMain.handle('claude:checkInstalled', async () => {
+  claudeLogger.debug('Checking if Claude CLI is installed');
   return new Promise((resolve) => {
     const check = spawn('which', ['claude'], {
       shell: true,
       env: getEnvWithPath(),
     });
     check.on('close', (code) => {
-      resolve(code === 0);
+      const installed = code === 0;
+      claudeLogger.info(`Claude CLI installed: ${installed}`);
+      resolve(installed);
     });
     check.on('error', () => {
+      claudeLogger.warn('Claude CLI check failed');
       resolve(false);
     });
   });
@@ -751,39 +1545,56 @@ ipcMain.handle('claude:checkInstalled', async () => {
 // Clear conversation state (start fresh)
 ipcMain.handle('claude:clearConversation', async (_, projectPath: string | null) => {
   const projectKey = projectPath || '__global__';
-  conversationState.delete(projectKey);
+  appSessionConversations.delete(projectKey);
+  // Also clear any pending edits since they're associated with the old conversation
+  pendingEdits = [];
+  claudeLogger.info('Cleared conversation and pending edits for app session', { project: projectKey });
   return { success: true };
 });
 
 // Edit approval handlers
 // Now edits are managed on the client side, so we just need to write/reject files
 ipcMain.handle('claude:getPendingEdits', () => {
+  claudeLogger.debug('Getting pending edits', { count: pendingEdits.length });
   return pendingEdits;
 });
 
 ipcMain.handle('claude:approveEdit', async (_, editId: string, filePath?: string, content?: string) => {
   // If filePath and content provided, use those (client-side edit management)
   if (filePath && content !== undefined) {
+    const fileName = path.basename(filePath);
+    claudeLogger.start(`Approving edit: ${fileName}`);
     try {
       // Ensure directory exists
       const dir = filePath.substring(0, filePath.lastIndexOf('/'));
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(filePath, content, 'utf-8');
+      // Remove from pending edits (in case it exists)
+      pendingEdits = pendingEdits.filter(e => e.id !== editId);
+      claudeLogger.success(`Approved edit: ${fileName}`);
       return { success: true };
     } catch (error) {
+      claudeLogger.error(`Failed to approve edit: ${fileName}`, error);
       return { success: false, error: String(error) };
     }
   }
 
   // Fallback to server-side lookup (legacy)
   const edit = pendingEdits.find(e => e.id === editId);
-  if (!edit) return { success: false, error: 'Edit not found' };
+  if (!edit) {
+    claudeLogger.warn('Edit not found', { editId });
+    return { success: false, error: 'Edit not found' };
+  }
 
+  const fileName = path.basename(edit.filePath);
+  claudeLogger.start(`Approving edit (legacy): ${fileName}`);
   try {
     await fs.writeFile(edit.filePath, edit.newContent, 'utf-8');
     pendingEdits = pendingEdits.filter(e => e.id !== editId);
+    claudeLogger.success(`Approved edit: ${fileName}`);
     return { success: true };
   } catch (error) {
+    claudeLogger.error(`Failed to approve edit: ${fileName}`, error);
     return { success: false, error: String(error) };
   }
 });
@@ -791,22 +1602,27 @@ ipcMain.handle('claude:approveEdit', async (_, editId: string, filePath?: string
 ipcMain.handle('claude:rejectEdit', async (_, editId: string) => {
   const edit = pendingEdits.find(e => e.id === editId);
   if (!edit) {
+    claudeLogger.debug('Edit already removed', { editId });
     pendingEdits = pendingEdits.filter(e => e.id !== editId);
     return { success: true };
   }
 
+  const fileName = path.basename(edit.filePath);
+  claudeLogger.start(`Rejecting edit: ${fileName}`);
   try {
     if (edit.isNewFile || edit.originalContent === '') {
       // Delete the new file
       await fs.unlink(edit.filePath);
+      claudeLogger.success(`Rejected edit (deleted new file): ${fileName}`);
     } else {
       // Restore original content
       await fs.writeFile(edit.filePath, edit.originalContent, 'utf-8');
+      claudeLogger.success(`Rejected edit (restored): ${fileName}`);
     }
     pendingEdits = pendingEdits.filter(e => e.id !== editId);
     return { success: true };
   } catch (error) {
-    console.error('Failed to reject edit:', error);
+    claudeLogger.error(`Failed to reject edit: ${fileName}`, error);
     // Still remove from pending list even if restore fails
     pendingEdits = pendingEdits.filter(e => e.id !== editId);
     return { success: false, error: String(error) };
@@ -824,6 +1640,8 @@ const terminals: Map<string, TerminalSession> = new Map();
 ipcMain.handle('terminal:create', (_, cwd?: string) => {
   const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/zsh';
   const id = crypto.randomUUID();
+
+  terminalLogger.start('Creating terminal', { shell, cwd: cwd || os.homedir() });
 
   // Use login shell args to load profile (.zshrc, .bashrc, etc.)
   // This ensures Oh My Posh and other customizations are loaded
@@ -845,12 +1663,14 @@ ipcMain.handle('terminal:create', (_, cwd?: string) => {
   });
 
   terminals.set(id, { pty: ptyProcess, id });
+  terminalLogger.success('Terminal created', { id: id.substring(0, 8) });
 
   ptyProcess.onData((data) => {
     mainWindow?.webContents.send('terminal:data', { id, data });
   });
 
   ptyProcess.onExit(({ exitCode }) => {
+    terminalLogger.info('Terminal exited', { id: id.substring(0, 8), exitCode });
     mainWindow?.webContents.send('terminal:exit', { id, exitCode });
     terminals.delete(id);
   });
@@ -860,21 +1680,32 @@ ipcMain.handle('terminal:create', (_, cwd?: string) => {
 
 ipcMain.handle('terminal:write', (_, id: string, data: string) => {
   const terminal = terminals.get(id);
-  if (!terminal) return { success: false, error: 'Terminal not found' };
+  if (!terminal) {
+    terminalLogger.warn('Terminal not found', { id: id.substring(0, 8) });
+    return { success: false, error: 'Terminal not found' };
+  }
   terminal.pty.write(data);
   return { success: true };
 });
 
 ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
   const terminal = terminals.get(id);
-  if (!terminal) return { success: false, error: 'Terminal not found' };
+  if (!terminal) {
+    terminalLogger.warn('Terminal not found for resize', { id: id.substring(0, 8) });
+    return { success: false, error: 'Terminal not found' };
+  }
+  terminalLogger.debug('Resizing terminal', { id: id.substring(0, 8), cols, rows });
   terminal.pty.resize(cols, rows);
   return { success: true };
 });
 
 ipcMain.handle('terminal:kill', (_, id: string) => {
   const terminal = terminals.get(id);
-  if (!terminal) return { success: false, error: 'Terminal not found' };
+  if (!terminal) {
+    terminalLogger.warn('Terminal not found for kill', { id: id.substring(0, 8) });
+    return { success: false, error: 'Terminal not found' };
+  }
+  terminalLogger.info('Killing terminal', { id: id.substring(0, 8) });
   terminal.pty.kill();
   terminals.delete(id);
   return { success: true };
@@ -882,44 +1713,66 @@ ipcMain.handle('terminal:kill', (_, id: string) => {
 
 // Clean up terminals on app quit
 app.on('before-quit', async () => {
-  terminals.forEach((terminal) => {
-    terminal.pty.kill();
-  });
-  terminals.clear();
+  systemLogger.info('App quitting, cleaning up...');
+
+  if (terminals.size > 0) {
+    terminalLogger.info(`Killing ${terminals.size} terminals`);
+    terminals.forEach((terminal) => {
+      terminal.pty.kill();
+    });
+    terminals.clear();
+  }
 
   // Stop all language servers
+  lspLogger.info('Stopping all language servers');
   await lspManager.stopAll();
+
+  systemLogger.success('Cleanup complete');
 });
 
 // LSP (Language Server Protocol) Handlers
 ipcMain.handle('lsp:setProjectPath', (_, projectPath: string) => {
+  lspLogger.info('Setting project path', path.basename(projectPath));
   lspManager.setProjectPath(projectPath);
   return { success: true };
 });
 
 ipcMain.handle('lsp:startServer', async (_, serverName: string) => {
+  lspLogger.start(`Starting server: ${serverName}`);
   try {
     const success = await lspManager.startServer(serverName);
+    if (success) {
+      lspLogger.success(`Started server: ${serverName}`);
+    } else {
+      lspLogger.warn(`Failed to start server: ${serverName}`);
+    }
     return { success };
   } catch (error) {
+    lspLogger.error(`Error starting server: ${serverName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('lsp:stopServer', async (_, serverName: string) => {
+  lspLogger.info(`Stopping server: ${serverName}`);
   try {
     await lspManager.stopServer(serverName);
+    lspLogger.success(`Stopped server: ${serverName}`);
     return { success: true };
   } catch (error) {
+    lspLogger.error(`Error stopping server: ${serverName}`, error);
     return { success: false, error: String(error) };
   }
 });
 
 ipcMain.handle('lsp:stopAll', async () => {
+  lspLogger.info('Stopping all servers');
   try {
     await lspManager.stopAll();
+    lspLogger.success('Stopped all servers');
     return { success: true };
   } catch (error) {
+    lspLogger.error('Error stopping all servers', error);
     return { success: false, error: String(error) };
   }
 });
@@ -1299,6 +2152,7 @@ function parsePlaywrightOutput(output: string, _projectPath: string): TestFileRe
 
 // Detect available test frameworks in the project
 ipcMain.handle('tests:detectFrameworks', async (_, projectPath: string) => {
+  testLogger.start('Detecting test frameworks');
   interface DetectedFramework {
     id: string;
     name: string;
@@ -1399,11 +2253,13 @@ ipcMain.handle('tests:detectFrameworks', async (_, projectPath: string) => {
     }
   }
 
+  testLogger.success('Detected frameworks', { count: frameworks.length, frameworks: frameworks.map(f => f.id) });
   return { frameworks };
 });
 
 // Detect test files and parse their structure
 ipcMain.handle('tests:detect', async (_, projectPath: string, framework?: string) => {
+  testLogger.start('Detecting test files', { framework: framework || 'all' });
   try {
     const testFiles: TestFileResult[] = [];
 
@@ -1626,8 +2482,11 @@ ipcMain.handle('tests:detect', async (_, projectPath: string, framework?: string
     // Sort by file name
     testFiles.sort((a, b) => a.name.localeCompare(b.name));
 
+    const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
+    testLogger.success('Detected test files', { files: testFiles.length, tests: totalTests });
     return { success: true, testFiles };
   } catch (error) {
+    testLogger.error('Failed to detect tests', error);
     return { success: false, error: String(error) };
   }
 });
@@ -1637,8 +2496,11 @@ ipcMain.handle('tests:run', async (_, projectPath: string, testFile?: string, te
   const runner = framework || await detectTestRunner(projectPath);
 
   if (!runner) {
+    testLogger.warn('No test runner detected');
     return { success: false, error: 'No test runner detected. Install Jest, Vitest, or Playwright.' };
   }
+
+  testLogger.start(`Running tests with ${runner}`, { file: testFile ? path.basename(testFile) : 'all', testName });
 
   return new Promise((resolve) => {
     let cmd: string;
@@ -1693,7 +2555,7 @@ ipcMain.handle('tests:run', async (_, projectPath: string, testFile?: string, te
       }
     }
 
-    console.log('[TestRunner] Command:', cmd, args.join(' '));
+    testLogger.command(cmd, args);
 
     const proc = spawn(cmd, args, {
       cwd: projectPath,
@@ -1713,14 +2575,11 @@ ipcMain.handle('tests:run', async (_, projectPath: string, testFile?: string, te
     });
 
     proc.on('error', (err) => {
+      testLogger.error('Test runner spawn error', err);
       resolve({ success: false, error: err.message });
     });
 
     proc.on('close', (_code) => {
-      console.log('[TestRunner] stdout length:', stdout.length);
-      console.log('[TestRunner] stderr preview:', stderr.slice(0, 300));
-      console.log('[TestRunner] stdout preview:', stdout.slice(0, 500));
-
       // Combine output for display (stderr first since it usually has errors)
       const rawOutput = stderr + (stderr && stdout ? '\n' : '') + stdout;
 
@@ -1730,13 +2589,17 @@ ipcMain.handle('tests:run', async (_, projectPath: string, testFile?: string, te
         : parseJestOutput;
       const testFiles = parser(stdout, projectPath);
 
-      console.log('[TestRunner] Parsed testFiles:', testFiles.length, 'files, tests:', testFiles[0]?.tests?.length || 0);
-
       if (testFiles.length > 0) {
+        const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
+        const passed = testFiles.reduce((sum, f) => sum + f.tests.filter(t => t.status === 'passed').length, 0);
+        const failed = testFiles.reduce((sum, f) => sum + f.tests.filter(t => t.status === 'failed').length, 0);
+        testLogger.success('Tests completed', { total: totalTests, passed, failed });
         resolve({ success: true, testFiles, output: rawOutput });
       } else if (stderr && !stdout.includes('{')) {
+        testLogger.error('Test run failed', stderr.substring(0, 200));
         resolve({ success: false, error: stderr, output: rawOutput });
       } else {
+        testLogger.warn('No test results found');
         resolve({ success: false, error: 'No test results found.', output: rawOutput });
       }
     });
@@ -1747,6 +2610,7 @@ ipcMain.handle('tests:run', async (_, projectPath: string, testFile?: string, te
 
 // Helper to run git commands
 const runGit = async (projectPath: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> => {
+  gitLogger.command('git', args);
   return new Promise((resolve) => {
     const proc = spawn('git', args, {
       cwd: projectPath,
@@ -1761,10 +2625,14 @@ const runGit = async (projectPath: string, args: string[]): Promise<{ stdout: st
 
     proc.on('close', (code) => {
       // Only trim trailing whitespace from stdout to preserve leading spaces (important for git status porcelain format)
+      if (code !== 0) {
+        gitLogger.warn(`git ${args[0]} exited with code ${code}`, stderr.trim() || undefined);
+      }
       resolve({ stdout: stdout.trimEnd(), stderr: stderr.trim(), code: code || 0 });
     });
 
     proc.on('error', (err) => {
+      gitLogger.error(`git ${args[0]} error`, err.message);
       resolve({ stdout: '', stderr: err.message, code: 1 });
     });
   });
@@ -1773,6 +2641,7 @@ const runGit = async (projectPath: string, args: string[]): Promise<{ stdout: st
 // Check if directory is a git repo
 ipcMain.handle('git:isRepo', async (_, projectPath: string) => {
   const result = await runGit(projectPath, ['rev-parse', '--is-inside-work-tree']);
+  gitLogger.info(`Is git repo: ${result.code === 0}`);
   return { success: true, isRepo: result.code === 0 };
 });
 
@@ -1782,9 +2651,12 @@ ipcMain.handle('git:branch', async (_, projectPath: string) => {
   const all = await runGit(projectPath, ['branch', '--format=%(refname:short)']);
   const remotes = await runGit(projectPath, ['branch', '-r', '--format=%(refname:short)']);
 
+  const currentBranch = current.stdout || 'HEAD';
+  gitLogger.info(`Current branch: ${currentBranch}`, { local: all.stdout.split('\n').filter(Boolean).length });
+
   return {
     success: true,
-    current: current.stdout || 'HEAD',
+    current: currentBranch,
     all: all.stdout.split('\n').filter(Boolean),
     remotes: remotes.stdout.split('\n').filter(Boolean),
   };
@@ -1874,66 +2746,167 @@ ipcMain.handle('git:status', async (_, projectPath: string) => {
     }
   }
 
+  const aheadCount = parseInt(ahead.stdout) || 0;
+  const behindCount = parseInt(behind.stdout) || 0;
+  gitLogger.success(`Status loaded`, { changes: changes.length, ahead: aheadCount, behind: behindCount });
+
   return {
     success: true,
     changes,
-    ahead: parseInt(ahead.stdout) || 0,
-    behind: parseInt(behind.stdout) || 0,
+    ahead: aheadCount,
+    behind: behindCount,
   };
 });
 
 // Stage files
 ipcMain.handle('git:stage', async (_, projectPath: string, files: string[]) => {
+  gitLogger.start('Staging files', { count: files.length });
   const result = await runGit(projectPath, ['add', ...files]);
+  if (result.code === 0) {
+    gitLogger.success('Staged files', { count: files.length });
+  } else {
+    gitLogger.error('Failed to stage files', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr };
 });
 
 // Unstage files
 ipcMain.handle('git:unstage', async (_, projectPath: string, files: string[]) => {
+  gitLogger.start('Unstaging files', { count: files.length });
   const result = await runGit(projectPath, ['reset', 'HEAD', ...files]);
+  if (result.code === 0) {
+    gitLogger.success('Unstaged files', { count: files.length });
+  } else {
+    gitLogger.error('Failed to unstage files', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr };
 });
 
 // Commit
 ipcMain.handle('git:commit', async (_, projectPath: string, message: string) => {
+  gitLogger.start('Creating commit', message.substring(0, 50));
   const result = await runGit(projectPath, ['commit', '-m', message]);
+  if (result.code === 0) {
+    gitLogger.success('Commit created');
+  } else {
+    gitLogger.error('Commit failed', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr, output: result.stdout };
 });
 
 // Push
 ipcMain.handle('git:push', async (_, projectPath: string, branch?: string) => {
-  const args = branch ? ['push', '-u', 'origin', branch, '--progress'] : ['push', '--progress'];
+  gitLogger.start('Pushing', branch || 'current branch');
+
+  // If no branch specified, check if we need to set upstream
+  let args: string[];
+  if (branch) {
+    args = ['push', '-u', 'origin', branch, '--progress'];
+  } else {
+    // Check if current branch has an upstream tracking branch
+    const trackingResult = await runGit(projectPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    const hasUpstream = trackingResult.code === 0 && trackingResult.stdout?.trim();
+
+    if (hasUpstream) {
+      // Has upstream, just push
+      args = ['push', '--progress'];
+    } else {
+      // No upstream, get current branch name and set upstream
+      const branchResult = await runGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+      const currentBranch = branchResult.stdout?.trim();
+      if (currentBranch) {
+        gitLogger.info(`No upstream set, pushing with --set-upstream origin ${currentBranch}`);
+        args = ['push', '--set-upstream', 'origin', currentBranch, '--progress'];
+      } else {
+        args = ['push', '--progress'];
+      }
+    }
+  }
+
   const result = await runGit(projectPath, args);
+  if (result.code === 0) {
+    gitLogger.success('Pushed successfully');
+  } else {
+    gitLogger.error('Push failed', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr, output: result.stdout || result.stderr };
 });
 
 // Pull
 ipcMain.handle('git:pull', async (_, projectPath: string) => {
+  gitLogger.start('Pulling');
   const result = await runGit(projectPath, ['pull']);
+  if (result.code === 0) {
+    gitLogger.success('Pulled successfully');
+  } else {
+    gitLogger.error('Pull failed', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr, output: result.stdout };
 });
 
 // Fetch all remotes
 ipcMain.handle('git:fetch', async (_, projectPath: string) => {
+  gitLogger.start('Fetching all remotes');
   const result = await runGit(projectPath, ['fetch', '--all', '--prune']);
+  if (result.code === 0) {
+    gitLogger.success('Fetched all remotes');
+  } else {
+    gitLogger.error('Fetch failed', result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr, output: result.stdout };
 });
 
 // Create branch
 ipcMain.handle('git:createBranch', async (_, projectPath: string, branchName: string, checkout: boolean = true) => {
+  gitLogger.start(`Creating branch: ${branchName}`, { checkout });
   if (checkout) {
     const result = await runGit(projectPath, ['checkout', '-b', branchName]);
+    if (result.code === 0) {
+      gitLogger.success(`Created and checked out: ${branchName}`);
+    } else {
+      gitLogger.error(`Failed to create branch: ${branchName}`, result.stderr);
+    }
     return { success: result.code === 0, error: result.stderr };
   } else {
     const result = await runGit(projectPath, ['branch', branchName]);
+    if (result.code === 0) {
+      gitLogger.success(`Created branch: ${branchName}`);
+    } else {
+      gitLogger.error(`Failed to create branch: ${branchName}`, result.stderr);
+    }
     return { success: result.code === 0, error: result.stderr };
   }
 });
 
 // Checkout branch
 ipcMain.handle('git:checkout', async (_, projectPath: string, branchName: string) => {
+  gitLogger.start(`Checking out: ${branchName}`);
   const result = await runGit(projectPath, ['checkout', branchName]);
+  if (result.code === 0) {
+    gitLogger.success(`Checked out: ${branchName}`);
+  } else {
+    gitLogger.error(`Checkout failed: ${branchName}`, result.stderr);
+  }
   return { success: result.code === 0, error: result.stderr };
+});
+
+// Restore/reset all changes in a worktree
+ipcMain.handle('git:restore', async (_, projectPath: string) => {
+  gitLogger.start(`Restoring all changes in: ${projectPath}`);
+  // First restore all tracked files
+  const restoreResult = await runGit(projectPath, ['restore', '.']);
+  if (restoreResult.code !== 0) {
+    gitLogger.error(`Restore failed`, restoreResult.stderr);
+    return { success: false, error: restoreResult.stderr };
+  }
+  // Then clean untracked files (but not ignored ones)
+  const cleanResult = await runGit(projectPath, ['clean', '-fd']);
+  if (cleanResult.code === 0) {
+    gitLogger.success(`Restored all changes in: ${projectPath}`);
+  } else {
+    gitLogger.error(`Clean failed`, cleanResult.stderr);
+  }
+  return { success: cleanResult.code === 0, error: cleanResult.stderr };
 });
 
 // List worktrees
@@ -1981,12 +2954,17 @@ ipcMain.handle('git:worktree:add', async (_, projectPath: string, worktreePath: 
     : ['worktree', 'add', worktreePath, branch];
 
   const result = await runGit(projectPath, args);
-  return { success: result.code === 0, error: result.stderr };
+  // Return the resolved absolute path so it matches what git worktree list returns
+  const resolvedPath = path.resolve(worktreePath);
+  return { success: result.code === 0, error: result.stderr, path: resolvedPath };
 });
 
 // Remove worktree
-ipcMain.handle('git:worktree:remove', async (_, projectPath: string, worktreePath: string) => {
-  const result = await runGit(projectPath, ['worktree', 'remove', worktreePath]);
+ipcMain.handle('git:worktree:remove', async (_, projectPath: string, worktreePath: string, force: boolean = true) => {
+  const args = force
+    ? ['worktree', 'remove', '--force', worktreePath]
+    : ['worktree', 'remove', worktreePath];
+  const result = await runGit(projectPath, args);
   return { success: result.code === 0, error: result.stderr };
 });
 
@@ -2017,6 +2995,55 @@ ipcMain.handle('git:pr:create', async (_, projectPath: string, options: { title:
       resolve({ success: false, error: 'GitHub CLI (gh) not found. Install it with: brew install gh' });
     });
   });
+});
+
+// Get PR template from repository
+ipcMain.handle('git:pr:template', async (_, projectPath: string) => {
+  // Check common PR template locations
+  const templatePaths = [
+    '.github/pull_request_template.md',
+    '.github/PULL_REQUEST_TEMPLATE.md',
+    'docs/pull_request_template.md',
+    'PULL_REQUEST_TEMPLATE.md',
+    '.github/PULL_REQUEST_TEMPLATE/default.md',
+  ];
+
+  for (const templatePath of templatePaths) {
+    try {
+      const fullPath = path.join(projectPath, templatePath);
+      const content = await fs.readFile(fullPath, 'utf-8');
+      return { success: true, template: content, path: templatePath };
+    } catch {
+      // Template not found at this path, try next
+    }
+  }
+
+  return { success: true, template: null };
+});
+
+// Get default branch from remote
+ipcMain.handle('git:defaultBranch', async (_, projectPath: string) => {
+  // Try to get default branch from remote HEAD
+  const result = await runGit(projectPath, ['symbolic-ref', 'refs/remotes/origin/HEAD', '--short']);
+  if (result.code === 0 && result.stdout) {
+    // Returns something like "origin/main", extract just "main"
+    const branch = result.stdout.trim().replace('origin/', '');
+    return { success: true, branch };
+  }
+
+  // Fallback: check if main or master exists
+  const branchResult = await runGit(projectPath, ['branch', '-r']);
+  if (branchResult.code === 0) {
+    const branches = branchResult.stdout;
+    if (branches.includes('origin/main')) {
+      return { success: true, branch: 'main' };
+    }
+    if (branches.includes('origin/master')) {
+      return { success: true, branch: 'master' };
+    }
+  }
+
+  return { success: false, branch: 'main' }; // Default fallback
 });
 
 // Get staged diff
@@ -2130,6 +3157,138 @@ ipcMain.handle('git:pr:list', async (_, projectPath: string) => {
   });
 });
 
+// Get PR comments (both review comments and issue comments)
+ipcMain.handle('git:pr:comments', async (_, projectPath: string) => {
+  try {
+    // First, get the current PR number for this branch
+    const branchProc = spawn('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: projectPath,
+      env: getEnvWithPath(),
+    });
+
+    const branchName = await new Promise<string>((resolve) => {
+      let stdout = '';
+      branchProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      branchProc.on('close', () => resolve(stdout.trim()));
+    });
+
+    // Get PR for this branch
+    const prProc = spawn('gh', ['pr', 'view', branchName, '--json', 'number,reviews,comments'], {
+      cwd: projectPath,
+      env: getEnvWithPath(),
+    });
+
+    const prResult = await new Promise<{ success: boolean; data?: { number: number; reviews: unknown[]; comments: unknown[] }; error?: string }>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      prProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      prProc.stderr.on('data', (data) => { stderr += data.toString(); });
+      prProc.on('close', (code) => {
+        if (code === 0) {
+          try {
+            resolve({ success: true, data: JSON.parse(stdout) });
+          } catch {
+            resolve({ success: false, error: 'Failed to parse PR data' });
+          }
+        } else {
+          resolve({ success: false, error: stderr.trim() || 'No PR found for this branch' });
+        }
+      });
+      prProc.on('error', () => resolve({ success: false, error: 'GitHub CLI not found' }));
+    });
+
+    if (!prResult.success || !prResult.data) {
+      return { success: false, error: prResult.error };
+    }
+
+    const prNumber = prResult.data.number;
+
+    // Get review comments (inline comments on code)
+    const reviewCommentsProc = spawn('gh', [
+      'api',
+      `repos/{owner}/{repo}/pulls/${prNumber}/comments`,
+      '--jq', '.[] | {id, path, line, body, user: .user.login, createdAt: .created_at, side: .side, startLine: .start_line}'
+    ], {
+      cwd: projectPath,
+      env: getEnvWithPath(),
+    });
+
+    const reviewComments = await new Promise<Array<{
+      id: number;
+      path: string;
+      line: number;
+      body: string;
+      user: string;
+      createdAt: string;
+      side: string;
+      startLine?: number;
+    }>>((resolve) => {
+      let stdout = '';
+      reviewCommentsProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      reviewCommentsProc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            // Parse JSONL output (one JSON object per line)
+            const comments = stdout.trim().split('\n')
+              .filter(line => line.trim())
+              .map(line => JSON.parse(line));
+            resolve(comments);
+          } catch {
+            resolve([]);
+          }
+        } else {
+          resolve([]);
+        }
+      });
+      reviewCommentsProc.on('error', () => resolve([]));
+    });
+
+    // Get general PR comments (not on specific lines)
+    const issueCommentsProc = spawn('gh', [
+      'api',
+      `repos/{owner}/{repo}/issues/${prNumber}/comments`,
+      '--jq', '.[] | {id, body, user: .user.login, createdAt: .created_at}'
+    ], {
+      cwd: projectPath,
+      env: getEnvWithPath(),
+    });
+
+    const issueComments = await new Promise<Array<{
+      id: number;
+      body: string;
+      user: string;
+      createdAt: string;
+    }>>((resolve) => {
+      let stdout = '';
+      issueCommentsProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      issueCommentsProc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            const comments = stdout.trim().split('\n')
+              .filter(line => line.trim())
+              .map(line => JSON.parse(line));
+            resolve(comments);
+          } catch {
+            resolve([]);
+          }
+        } else {
+          resolve([]);
+        }
+      });
+      issueCommentsProc.on('error', () => resolve([]));
+    });
+
+    return {
+      success: true,
+      prNumber,
+      reviewComments,
+      issueComments,
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to fetch PR comments' };
+  }
+});
+
 // Submit PR review with comments using gh CLI
 interface PRReviewComment {
   path: string;
@@ -2144,28 +3303,65 @@ ipcMain.handle('git:pr:review', async (_, projectPath: string, options: {
   comments: PRReviewComment[];
 }) => {
   try {
-    // First, get the current PR number for this branch
-    const prNumberProc = spawn('gh', ['pr', 'view', '--json', 'number', '--jq', '.number'], {
+    // First, get the current PR info including author
+    const prInfoProc = spawn('gh', ['pr', 'view', '--json', 'number,author', '--jq', '{number: .number, author: .author.login}'], {
       cwd: projectPath,
       env: getEnvWithPath(),
     });
 
-    const prNumber = await new Promise<string>((resolve, reject) => {
+    const prInfo = await new Promise<{ number: string; author: string }>((resolve, reject) => {
       let stdout = '';
       let stderr = '';
-      prNumberProc.stdout.on('data', (data) => { stdout += data.toString(); });
-      prNumberProc.stderr.on('data', (data) => { stderr += data.toString(); });
-      prNumberProc.on('close', (code) => {
+      prInfoProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      prInfoProc.stderr.on('data', (data) => { stderr += data.toString(); });
+      prInfoProc.on('close', (code) => {
         if (code === 0 && stdout.trim()) {
-          resolve(stdout.trim());
+          try {
+            const data = JSON.parse(stdout.trim());
+            resolve({ number: String(data.number), author: data.author });
+          } catch {
+            reject(new Error('Failed to parse PR info'));
+          }
         } else {
           reject(new Error(stderr.trim() || 'No PR found for current branch. Create a PR first.'));
         }
       });
-      prNumberProc.on('error', () => reject(new Error('GitHub CLI (gh) not found')));
+      prInfoProc.on('error', () => reject(new Error('GitHub CLI (gh) not found')));
     });
 
-    console.log('[git:pr:review] Found PR number:', prNumber);
+    const prNumber = prInfo.number;
+    console.log('[git:pr:review] Found PR number:', prNumber, 'author:', prInfo.author);
+
+    // Get current GitHub user
+    const userProc = spawn('gh', ['api', 'user', '--jq', '.login'], {
+      cwd: projectPath,
+      env: getEnvWithPath(),
+    });
+
+    const currentUser = await new Promise<string>((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      userProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      userProc.stderr.on('data', (data) => { stderr += data.toString(); });
+      userProc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          resolve(stdout.trim());
+        } else {
+          reject(new Error(stderr.trim() || 'Could not get current user'));
+        }
+      });
+      userProc.on('error', () => reject(new Error('GitHub CLI (gh) not found')));
+    });
+
+    console.log('[git:pr:review] Current user:', currentUser);
+
+    // Check if reviewing own PR - GitHub doesn't allow REQUEST_CHANGES on own PRs
+    const isOwnPR = currentUser.toLowerCase() === prInfo.author.toLowerCase();
+    let reviewAction = options.action;
+    if (isOwnPR && reviewAction === 'REQUEST_CHANGES') {
+      console.log('[git:pr:review] Own PR detected, using COMMENT instead of REQUEST_CHANGES');
+      reviewAction = 'COMMENT';
+    }
 
     // Build the review submission using GitHub API
     // The gh pr review command doesn't support inline comments, so we use the API directly
@@ -2221,40 +3417,98 @@ ipcMain.handle('git:pr:review', async (_, projectPath: string, options: {
 
     console.log('[git:pr:review] Commit SHA:', commitSha);
 
-    // Get list of files actually in the PR from GitHub
-    const prFilesProc = spawn('gh', ['pr', 'view', prNumber, '--json', 'files', '--jq', '.files[].path'], {
+    // Get the actual diff from GitHub to validate line numbers
+    // This is crucial - GitHub only accepts line numbers that are in the diff hunks
+    const prDiffProc = spawn('gh', ['pr', 'diff', prNumber], {
       cwd: projectPath,
       env: getEnvWithPath(),
     });
 
-    const prFilePaths = await new Promise<Set<string>>((resolve, reject) => {
+    const prDiff = await new Promise<string>((resolve, reject) => {
       let stdout = '';
       let stderr = '';
-      prFilesProc.stdout.on('data', (data) => { stdout += data.toString(); });
-      prFilesProc.stderr.on('data', (data) => { stderr += data.toString(); });
-      prFilesProc.on('close', (code) => {
+      prDiffProc.stdout.on('data', (data) => { stdout += data.toString(); });
+      prDiffProc.stderr.on('data', (data) => { stderr += data.toString(); });
+      prDiffProc.on('close', (code) => {
         if (code === 0) {
-          const paths = new Set(stdout.trim().split('\n').filter(p => p));
-          console.log('[git:pr:review] PR files from GitHub:', Array.from(paths));
-          resolve(paths);
+          resolve(stdout);
         } else {
-          reject(new Error(stderr.trim() || 'Could not get PR files'));
+          reject(new Error(stderr.trim() || 'Could not get PR diff'));
         }
       });
-      prFilesProc.on('error', () => reject(new Error('GitHub CLI (gh) not found')));
+      prDiffProc.on('error', () => reject(new Error('GitHub CLI (gh) not found')));
     });
 
-    // Filter comments to only include files that are actually in the PR
-    const validComments = options.comments.filter(c => c.line > 0 && prFilePaths.has(c.path));
-    console.log('[git:pr:review] Total comments:', options.comments.length, 'Valid comments (in PR):', validComments.length);
+    // Parse the diff to get valid line numbers per file
+    // Returns a Map of file path -> Set of valid line numbers (RIGHT side only)
+    const parseGitHubDiff = (diff: string): Map<string, Set<number>> => {
+      const validLines = new Map<string, Set<number>>();
+      let currentFile: string | null = null;
+      let newLineNum = 0;
+
+      for (const line of diff.split('\n')) {
+        // File header: diff --git a/path b/path
+        if (line.startsWith('diff --git')) {
+          const match = line.match(/diff --git a\/.* b\/(.*)/);
+          if (match) {
+            currentFile = match[1];
+            validLines.set(currentFile, new Set());
+          }
+          continue;
+        }
+
+        // Hunk header: @@ -old,count +new,count @@
+        if (line.startsWith('@@') && currentFile) {
+          const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+          if (match) {
+            newLineNum = parseInt(match[1], 10);
+          }
+          continue;
+        }
+
+        if (!currentFile) continue;
+
+        // Addition or context line - these are valid for RIGHT side comments
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          validLines.get(currentFile)!.add(newLineNum);
+          newLineNum++;
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          // Deletion - don't increment new line number
+        } else if (!line.startsWith('\\')) {
+          // Context line (starts with space or is empty in some cases)
+          validLines.get(currentFile)!.add(newLineNum);
+          newLineNum++;
+        }
+      }
+
+      return validLines;
+    };
+
+    const validLinesByFile = parseGitHubDiff(prDiff);
+    console.log('[git:pr:review] Files in diff:', Array.from(validLinesByFile.keys()));
+
+    // Filter comments to only include lines that are actually in the diff
+    const validComments = options.comments.filter(c => {
+      const fileLines = validLinesByFile.get(c.path);
+      if (!fileLines) {
+        console.log(`[git:pr:review] Skipping comment - file not in diff: ${c.path}`);
+        return false;
+      }
+      if (!fileLines.has(c.line)) {
+        console.log(`[git:pr:review] Skipping comment - line not in diff: ${c.path}:${c.line}`);
+        return false;
+      }
+      return true;
+    });
+
+    console.log('[git:pr:review] Total comments:', options.comments.length, 'Valid comments (in diff):', validComments.length);
 
     if (validComments.length === 0 && options.comments.length > 0) {
-      console.log('[git:pr:review] Warning: All comments filtered out. Comment paths:',
-        [...new Set(options.comments.map(c => c.path))].slice(0, 5));
+      console.log('[git:pr:review] Warning: All comments filtered out. Comment paths and lines:',
+        options.comments.slice(0, 5).map(c => `${c.path}:${c.line}`));
     }
 
     // Format comments for GitHub API
-    // Note: Disabling multi-line comments (start_line) as they require both lines to be in the same diff hunk
     const formattedComments = validComments.map(c => {
       const comment: { path: string; line: number; body: string; side: string; start_line?: number; start_side?: string } = {
         path: c.path,
@@ -2262,11 +3516,6 @@ ipcMain.handle('git:pr:review', async (_, projectPath: string, options: {
         body: c.body,
         side: 'RIGHT',
       };
-      // Temporarily disabled multi-line comments to debug 422 errors
-      // if (c.startLine && c.startLine !== c.line) {
-      //   comment.start_line = c.startLine;
-      //   comment.start_side = 'RIGHT';
-      // }
       return comment;
     });
 
@@ -2381,7 +3630,7 @@ ipcMain.handle('git:pr:review', async (_, projectPath: string, options: {
       const payload = {
         commit_id: commitSha,
         body: options.body,
-        event: options.action,
+        event: reviewAction,
         comments: formattedComments.length > 0 ? formattedComments : undefined,
       };
       const result = await submitBatch(payload);
@@ -2438,13 +3687,13 @@ ipcMain.handle('git:pr:review', async (_, projectPath: string, options: {
 
     // Submit the final review with action and summary (no inline comments)
     const finalBatchNum = totalBatches;
-    console.log(`[git:pr:review] Submitting final review (batch ${finalBatchNum}/${totalBatches}) with action: ${options.action}`);
+    console.log(`[git:pr:review] Submitting final review (batch ${finalBatchNum}/${totalBatches}) with action: ${reviewAction}`);
     sendProgress(finalBatchNum, totalBatches, 'sending');
 
     const finalPayload = {
       commit_id: commitSha,
       body: options.body,
-      event: options.action,
+      event: reviewAction,
     };
 
     const finalResult = await submitBatch(finalPayload);

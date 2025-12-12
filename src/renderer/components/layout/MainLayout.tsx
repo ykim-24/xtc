@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { TitleBar } from './TitleBar';
 import { Explorer } from '@/components/explorer/Explorer';
@@ -11,15 +12,49 @@ import { DebugPanel } from '@/components/debug';
 import { FeatureSidebar } from '@/components/feature-sidebar';
 import { TestPanel, TestFrameworkSelector } from '@/components/testing';
 import { GitPanel } from '@/components/git';
-import { useSettingsStore, useTestStore } from '@/stores';
+import { LinearPanel } from '@/components/linear/LinearPanel';
+import { MinimizedSessionIndicators } from '@/components/linear/MinimizedSessionIndicators';
+import { WorktreeGraph } from '@/components/worktrees';
+import { useSettingsStore, useTestStore, useEditsStore } from '@/stores';
 
 export function MainLayout() {
   const { explorerVisible, chatVisible, terminalVisible, debugVisible } = useSettingsStore();
-  const { mode, selectedFramework } = useTestStore();
+  const { mode, selectedFramework, setMode, setPreviousMode } = useTestStore();
+  const { addPendingEdit, updatePendingEdit, clearPendingEdits } = useEditsStore();
+
+  // Listen for pending edits from backend (Claude's file changes detected via git)
+  useEffect(() => {
+    // Clear any stale pending edits from previous sessions on mount
+    // Edits should only come from new conversations, not persist across restarts
+    clearPendingEdits();
+
+    // Listen for new pending edits from backend
+    const unsubscribeAdd = window.electron?.claude?.onPendingEditAdded((edit) => {
+      addPendingEdit(edit);
+      // Switch to home mode to show the diff viewer
+      const currentMode = useTestStore.getState().mode;
+      if (currentMode !== 'home') {
+        setPreviousMode(currentMode);
+        setMode('home');
+      }
+    });
+
+    // Listen for updated pending edits (when user provides feedback on existing diff)
+    const unsubscribeUpdate = window.electron?.claude?.onPendingEditUpdated((edit) => {
+      updatePendingEdit(edit);
+    });
+
+    return () => {
+      unsubscribeAdd?.();
+      unsubscribeUpdate?.();
+    };
+  }, [addPendingEdit, updatePendingEdit, clearPendingEdits, setMode, setPreviousMode]);
 
   const isHomeMode = mode === 'home';
   const isTestsMode = mode === 'tests';
   const isGitMode = mode === 'git';
+  const isLinearMode = mode === 'linear';
+  const isWorktreesMode = mode === 'worktrees';
   const showFrameworkSelector = isTestsMode && !selectedFramework;
 
   return (
@@ -42,8 +77,8 @@ export function MainLayout() {
             <PanelResizeHandle className="w-1 bg-border-primary hover:bg-accent-primary transition-colors" />
           )}
 
-          {/* Center - Editor + Terminal (home mode) or TestPanel (tests mode) or GitPanel (git mode) */}
-          <Panel id="center" order={2} defaultSize={isTestsMode || isGitMode ? 68 : 50} minSize={30}>
+          {/* Center - Editor + Terminal (home mode) or TestPanel (tests mode) or GitPanel (git mode) or LinearPanel or Worktrees */}
+          <Panel id="center" order={2} defaultSize={isTestsMode || isGitMode || isLinearMode || isWorktreesMode ? 68 : 50} minSize={30}>
             <div className="h-full relative">
               {/* Home mode content */}
               <div className={`h-full ${isHomeMode ? '' : 'hidden'}`}>
@@ -68,6 +103,14 @@ export function MainLayout() {
               {/* Git mode content - always mounted so reviews can run in background */}
               <div className={`h-full ${isGitMode ? '' : 'hidden'}`}>
                 <GitPanel />
+              </div>
+              {/* Linear mode content */}
+              <div className={`h-full ${isLinearMode ? '' : 'hidden'}`}>
+                <LinearPanel />
+              </div>
+              {/* Worktrees mode content */}
+              <div className={`h-full ${isWorktreesMode ? '' : 'hidden'}`}>
+                <WorktreeGraph />
               </div>
             </div>
           </Panel>
@@ -127,6 +170,9 @@ export function MainLayout() {
           )}
         </PanelGroup>
       </div>
+
+      {/* Minimized StartWork session indicators */}
+      <MinimizedSessionIndicators />
     </div>
   );
 }

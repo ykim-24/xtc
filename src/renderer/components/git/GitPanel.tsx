@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { GitBranch, ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal } from 'lucide-react';
+import { ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal, Wrench } from 'lucide-react';
+import { PixelGit } from '@/components/feature-sidebar/PixelIcons';
 import { clsx } from 'clsx';
-import { useGitStore, useProjectStore } from '@/stores';
+import { useGitStore, useProjectStore, useTestStore, useChatStore } from '@/stores';
 import { ReviewPanel } from './ReviewPanel';
+import globeToFolderGif from '@/assets/globe-to-folder.gif';
 
 const statusIcons: Record<string, string> = {
   modified: 'M',
@@ -98,6 +100,7 @@ function parseAnsiOutput(text: string): React.ReactNode[] {
 
 export function GitPanel() {
   const { projectPath } = useProjectStore();
+  const { mode, setMode } = useTestStore();
   const {
     isRepo,
     currentBranch,
@@ -137,12 +140,25 @@ export function GitPanel() {
   const [commitMessage, setCommitMessage] = useState('');
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
+  const lastModeRef = useRef(mode);
+
+  // Refresh when switching to git tab
+  useEffect(() => {
+    if (mode === 'git' && lastModeRef.current !== 'git' && projectPath) {
+      refreshStatus(projectPath);
+    }
+    lastModeRef.current = mode;
+  }, [mode, projectPath, refreshStatus]);
   const [showNewBranchInput, setShowNewBranchInput] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
+  const [prCommentCount, setPrCommentCount] = useState(0);
+  const [isFixing, setIsFixing] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newBranchRef = useRef<HTMLDivElement>(null);
   const newBranchInputRef = useRef<HTMLInputElement>(null);
+
+  const { addMessage, setLoading, setStreamingMessageId, finishStreaming, setCurrentActivity, setResultStatus } = useChatStore();
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -195,6 +211,114 @@ export function GitPanel() {
     }
   }, [projectPath, refreshStatus, fetch, lastFetchTime]);
 
+  // Fetch PR comment count when branch changes
+  useEffect(() => {
+    const fetchPRComments = async () => {
+      if (!projectPath) return;
+      try {
+        const result = await window.electron?.git.pr.comments(projectPath);
+        if (result?.success && result.reviewComments) {
+          setPrCommentCount(result.reviewComments.length);
+        } else {
+          setPrCommentCount(0);
+        }
+      } catch {
+        setPrCommentCount(0);
+      }
+    };
+    fetchPRComments();
+  }, [projectPath, currentBranch]);
+
+  // Handle fix - send PR comments to Claude
+  const handleFix = async () => {
+    if (!projectPath || prCommentCount === 0) return;
+
+    setIsFixing(true);
+    setLoading(true);
+
+    try {
+      // Fetch the actual comments
+      const result = await window.electron?.git.pr.comments(projectPath);
+      if (!result?.success || !result.reviewComments?.length) {
+        setIsFixing(false);
+        setLoading(false);
+        return;
+      }
+
+      // Build the prompt
+      let prompt = `Please fix the following issues from PR comments:\n\n`;
+
+      // Group by file
+      const byFile = new Map<string, typeof result.reviewComments>();
+      for (const comment of result.reviewComments) {
+        if (!byFile.has(comment.path)) {
+          byFile.set(comment.path, []);
+        }
+        byFile.get(comment.path)!.push(comment);
+      }
+
+      for (const [filePath, comments] of byFile) {
+        prompt += `### ${filePath}\n`;
+        for (const c of comments) {
+          const lineInfo = c.line ? (c.startLine && c.startLine !== c.line ? `L${c.startLine}-${c.line}` : `L${c.line}`) : '';
+          // Strip HTML tags and clean up the comment body
+          const cleanBody = c.body
+            .replace(/<[^>]*>/g, '') // Remove HTML tags
+            .replace(/```suggestion[\s\S]*?```/g, '') // Remove suggestion blocks
+            .replace(/<!--[\s\S]*?-->/g, '') // Remove HTML comments
+            .replace(/\n{3,}/g, '\n\n') // Collapse multiple newlines
+            .trim();
+          if (cleanBody) {
+            prompt += `- ${lineInfo ? `(${lineInfo}) ` : ''}[@${c.user}] ${cleanBody}\n`;
+          }
+        }
+        prompt += '\n';
+      }
+
+      prompt += `\nPlease address each comment and make the necessary code changes.`;
+
+      // Add user message to chat
+      addMessage({
+        role: 'user',
+        content: prompt,
+      });
+
+      // Create placeholder for assistant response
+      const assistantMessageId = addMessage({
+        role: 'assistant',
+        content: '',
+        isStreaming: true,
+      });
+      setStreamingMessageId(assistantMessageId);
+
+      // Switch to home mode to see the chat
+      setMode('home');
+
+      // Send to Claude
+      const claudeResult = await window.electron?.claude.send(prompt, {}, projectPath);
+
+      if (claudeResult?.success) {
+        finishStreaming(assistantMessageId);
+        setCurrentActivity(null);
+        setResultStatus('ok');
+        setTimeout(() => setResultStatus(null), 2500);
+      } else {
+        // Show error in the assistant message
+        const errorMsg = claudeResult?.error || 'Failed to get response from Claude';
+        useChatStore.getState().updateMessage(assistantMessageId, `Error: ${errorMsg}`);
+        finishStreaming(assistantMessageId);
+        setResultStatus('error');
+        setTimeout(() => setResultStatus(null), 2500);
+      }
+    } catch (err) {
+      console.error('Fix failed:', err);
+      setResultStatus('error');
+    } finally {
+      setIsFixing(false);
+      setLoading(false);
+    }
+  };
+
   const stagedChanges = changes.filter((c) => c.staged);
   const unstagedChanges = changes.filter((c) => !c.staged);
 
@@ -212,6 +336,27 @@ export function GitPanel() {
 
   const handleUnstageAll = () => {
     if (projectPath) unstageAll(projectPath);
+  };
+
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  const handleRestoreAll = async () => {
+    if (!projectPath) return;
+    if (!confirm('Discard all changes? This will restore all modified files and remove untracked files.')) {
+      return;
+    }
+
+    setIsRestoring(true);
+    try {
+      const result = await window.electron?.git.restore(projectPath);
+      if (result?.success) {
+        // Refresh status
+        refreshStatus(projectPath);
+      }
+    } catch (err) {
+      console.error('Failed to restore:', err);
+    }
+    setIsRestoring(false);
   };
 
   const handleCommit = async () => {
@@ -260,8 +405,9 @@ export function GitPanel() {
   if (!projectPath) {
     return (
       <div className="flex flex-col h-full bg-bg-primary">
-        <div className="flex items-center justify-center h-full text-text-muted text-sm">
-          -- no project open --
+        <div className="flex flex-col items-center justify-center h-full gap-3 text-text-muted">
+          <PixelGit className="w-8 h-8" />
+          <span className="text-sm">-- no project open --</span>
         </div>
       </div>
     );
@@ -270,8 +416,9 @@ export function GitPanel() {
   if (isLoading && !isRepo) {
     return (
       <div className="flex flex-col h-full bg-bg-primary">
-        <div className="flex items-center justify-center h-full text-text-muted text-sm">
-          Loading...
+        <div className="flex flex-col items-center justify-center h-full gap-3 text-text-muted">
+          <PixelGit className="w-8 h-8" />
+          <span className="text-sm">Loading...</span>
         </div>
       </div>
     );
@@ -280,8 +427,9 @@ export function GitPanel() {
   if (!isRepo) {
     return (
       <div className="flex flex-col h-full bg-bg-primary">
-        <div className="flex items-center justify-center h-full text-text-muted text-sm">
-          -- not a git repository --
+        <div className="flex flex-col items-center justify-center h-full gap-3 text-text-muted">
+          <PixelGit className="w-8 h-8" />
+          <span className="text-sm">-- not a git repository --</span>
         </div>
       </div>
     );
@@ -300,22 +448,75 @@ export function GitPanel() {
 
   return (
     <div className="flex flex-col h-full bg-bg-primary relative">
-      {/* Fetching modal */}
+      {/* Fetching modal - Windows 98 style */}
       {isFetching && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-bg-secondary border border-border-primary rounded-lg shadow-xl p-6">
-            <div className="flex flex-col items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 bg-accent-primary rounded-full animate-bounce [animation-delay:-0.3s]" />
-                <div className="w-2 h-2 bg-accent-primary rounded-full animate-bounce [animation-delay:-0.15s]" />
-                <div className="w-2 h-2 bg-accent-primary rounded-full animate-bounce" />
+          <div className="bg-[#c0c0c0] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] shadow-xl" style={{ imageRendering: 'pixelated' }}>
+            {/* Title bar */}
+            <div className="bg-[#000080] px-2 py-1 flex items-center justify-between gap-8">
+              <span className="text-white text-xs font-bold" style={{ fontFamily: 'MS Sans Serif, Arial, sans-serif' }}>Fetching</span>
+              <button
+                onClick={() => setIsFetching(false)}
+                className="bg-[#c0c0c0] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] w-4 h-4 flex items-center justify-center text-xs font-bold hover:bg-[#d4d4d4] active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white"
+              >
+                ×
+              </button>
+            </div>
+            {/* Content */}
+            <div className="p-5 pb-4">
+              {/* Animation - Windows shell32 globe to folder */}
+              <div className="flex justify-center mb-4">
+                <img
+                  src={globeToFolderGif}
+                  alt="Downloading from remote"
+                  style={{ imageRendering: 'pixelated' }}
+                />
               </div>
-              <span className="text-sm text-text-primary font-mono">Fetching remotes...</span>
-              <span className="text-xs text-text-muted">Syncing with remote repositories</span>
+
+              {/* Status text */}
+              <div className="text-[11px] text-black mb-3" style={{ fontFamily: 'MS Sans Serif, Tahoma, sans-serif' }}>
+                Fetching from remote...
+              </div>
+
+              {/* Progress bar - chunky Win98 style with blocks */}
+              {/* 14 blocks × 17px + 13 gaps × 2px = 264px content */}
+              <div
+                className="bg-white border-2 border-t-[#808080] border-l-[#808080] border-b-white border-r-white overflow-hidden"
+                style={{ width: '272px', height: '20px', padding: '2px' }}
+              >
+                <div className="h-full flex gap-[2px]">
+                  {[...Array(14)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-full bg-[#000080]"
+                      style={{
+                        width: '17px',
+                        flexShrink: 0,
+                        animation: `blockFill${i} 5s steps(1) infinite`,
+                        opacity: 0,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      <style>{`
+        ${[...Array(14)].map((_, i) => {
+          const onStart = (i * 5); // Each block turns on 5% later
+          const offStart = 85; // All blocks turn off at 85%
+          return `
+            @keyframes blockFill${i} {
+              0%, ${onStart}% { opacity: 0; }
+              ${onStart + 1}%, ${offStart}% { opacity: 1; }
+              ${offStart + 1}%, 100% { opacity: 0; }
+            }
+          `;
+        }).join('')}
+      `}</style>
 
       {/* Repo name */}
       {remote && (
@@ -331,6 +532,17 @@ export function GitPanel() {
             >
               [ fetch ]
             </button>
+            {/* Fix button - shown when there are PR comments */}
+            {prCommentCount > 0 && (
+              <button
+                onClick={handleFix}
+                disabled={isFixing}
+                className="text-xs font-mono text-orange-400 hover:text-orange-300 transition-colors disabled:opacity-50"
+                title={`Fix ${prCommentCount} PR comment${prCommentCount !== 1 ? 's' : ''}`}
+              >
+                {isFixing ? '[ fixing... ]' : `[ fix (${prCommentCount}) ]`}
+              </button>
+            )}
             {/* Review button */}
             <button
               onClick={() => setReviewMode(true)}
@@ -502,7 +714,7 @@ export function GitPanel() {
       {/* Branch name */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
         <div className="flex items-center gap-2">
-          <GitBranch className="w-4 h-4 text-accent-primary" />
+          <PixelGit className="w-4 h-4 text-accent-primary" />
           <span className="text-sm font-medium text-text-primary">{currentBranch}</span>
           {(ahead > 0 || behind > 0) && (
             <span className="flex items-center gap-1 text-xs text-text-muted">
@@ -587,15 +799,27 @@ export function GitPanel() {
                   <span className="text-xs font-medium text-text-secondary">
                     Changes ({unstagedChanges.length})
                   </span>
-                  {unstagedChanges.length > 0 && (
-                    <button
-                      onClick={handleStageAll}
-                      className="text-xs text-text-muted hover:text-text-primary"
-                      title="Stage all"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {unstagedChanges.length > 0 && (
+                      <>
+                        <button
+                          onClick={handleRestoreAll}
+                          disabled={isRestoring}
+                          className="text-xs text-text-muted hover:text-yellow-400 disabled:opacity-50"
+                          title="Discard all changes"
+                        >
+                          <Minus className={`w-3 h-3 ${isRestoring ? 'animate-pulse' : ''}`} />
+                        </button>
+                        <button
+                          onClick={handleStageAll}
+                          className="text-xs text-text-muted hover:text-text-primary"
+                          title="Stage all"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 {unstagedChanges.length > 0 ? (
                   <div className="divide-y divide-border-primary">

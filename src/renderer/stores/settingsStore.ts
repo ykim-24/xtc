@@ -3,6 +3,12 @@ import { persist } from 'zustand/middleware';
 import { ThemeName } from '@/themes/tokens';
 
 interface SettingsState {
+  // User
+  userName: string;
+  setUserName: (name: string) => void;
+  hasCompletedOnboarding: boolean;
+  setHasCompletedOnboarding: (completed: boolean) => void;
+
   // Appearance
   theme: ThemeName;
   setTheme: (theme: ThemeName) => void;
@@ -73,6 +79,12 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      // User
+      userName: '',
+      setUserName: (userName) => set({ userName }),
+      hasCompletedOnboarding: false,
+      setHasCompletedOnboarding: (hasCompletedOnboarding) => set({ hasCompletedOnboarding }),
+
       // Appearance
       theme: 'dark',
       setTheme: (theme) => set({ theme }),

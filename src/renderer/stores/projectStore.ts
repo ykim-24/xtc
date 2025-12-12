@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { loadProjectTypes } from '../services/monacoConfig';
 import { useChatStore } from './chatStore';
 
+// Key for storing last project path in app storage
+const LAST_PROJECT_KEY = 'last_project_path';
+
 export interface ProjectFile {
   path: string;
   name: string;
@@ -81,6 +84,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Load type definitions from the project's node_modules
     if (projectPath) {
       loadProjectTypes(projectPath);
+      // Persist the project path to app storage
+      window.electron?.store.set(LAST_PROJECT_KEY, projectPath);
     }
   },
 
@@ -267,6 +272,21 @@ function setChildrenInTree(tree: ProjectFile[], targetPath: string, children: Pr
     }
     return node;
   });
+}
+
+/**
+ * Load the last opened project path from app storage
+ */
+export async function loadLastProjectPath(): Promise<string | null> {
+  try {
+    const result = await window.electron?.store.get<string>(LAST_PROJECT_KEY);
+    if (result?.success && result.data) {
+      return result.data;
+    }
+  } catch (error) {
+    console.error('Failed to load last project path:', error);
+  }
+  return null;
 }
 
 // Helper function to expand parent folders

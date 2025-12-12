@@ -9,3 +9,5 @@ export * from './editsStore';
 export * from './interactionLogStore';
 export * from './testStore';
 export * from './gitStore';
+export * from './worktreeStore';
+export * from './startWorkStore';

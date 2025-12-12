@@ -13,6 +13,7 @@ export interface ModalProps {
 
 export function Modal({ isOpen, onClose, title, children, className }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const mouseDownTargetRef = useRef<EventTarget | null>(null);
 
   // Close on escape key
   useEffect(() => {
@@ -31,9 +32,16 @@ export function Modal({ isOpen, onClose, title, children, className }: ModalProp
     };
   }, [isOpen, onClose]);
 
-  // Close on overlay click
+  // Track where mousedown started
+  const handleMouseDown = (e: React.MouseEvent) => {
+    mouseDownTargetRef.current = e.target;
+  };
+
+  // Close on overlay click only if mousedown also started on overlay
   const handleOverlayClick = (e: React.MouseEvent) => {
-    if (e.target === overlayRef.current) onClose();
+    if (e.target === overlayRef.current && mouseDownTargetRef.current === overlayRef.current) {
+      onClose();
+    }
   };
 
   if (!isOpen) return null;
@@ -41,6 +49,7 @@ export function Modal({ isOpen, onClose, title, children, className }: ModalProp
   return (
     <div
       ref={overlayRef}
+      onMouseDown={handleMouseDown}
       onClick={handleOverlayClick}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
     >

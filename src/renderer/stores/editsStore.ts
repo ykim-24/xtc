@@ -25,6 +25,7 @@ interface EditsState {
 
   setPendingEdits: (edits: PendingEdit[]) => void;
   addPendingEdit: (edit: PendingEdit) => void;
+  updatePendingEdit: (edit: PendingEdit) => void;
   removePendingEdit: (editId: string) => void;
   clearPendingEdits: () => void;
   setLoading: (loading: boolean) => void;
@@ -45,7 +46,16 @@ export const useEditsStore = create<EditsState>((set, get) => ({
   currentPrompt: null,
 
   setPendingEdits: (pendingEdits) => set({ pendingEdits }),
-  addPendingEdit: (edit) => set((state) => ({ pendingEdits: [...state.pendingEdits, edit] })),
+  addPendingEdit: (edit) => set((state) => {
+    // Prevent duplicates by checking if edit already exists
+    if (state.pendingEdits.some((e) => e.id === edit.id)) {
+      return state;
+    }
+    return { pendingEdits: [...state.pendingEdits, edit] };
+  }),
+  updatePendingEdit: (edit) => set((state) => ({
+    pendingEdits: state.pendingEdits.map((e) => e.id === edit.id ? edit : e)
+  })),
   removePendingEdit: (editId) => set((state) => ({
     pendingEdits: state.pendingEdits.filter((e) => e.id !== editId)
   })),

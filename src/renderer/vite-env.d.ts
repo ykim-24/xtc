@@ -72,8 +72,12 @@ interface PendingEdit {
   isNewFile?: boolean;
 }
 
+interface ClaudeSendOptions {
+  planOnly?: boolean; // Restrict to read-only tools (for planning phase)
+}
+
 interface ClaudeAPI {
-  send: (message: string, context: ChatContext, projectPath: string | null) => Promise<ClaudeSendResult>;
+  send: (message: string, context: ChatContext, projectPath: string | null, options?: ClaudeSendOptions) => Promise<ClaudeSendResult>;
   checkInstalled: () => Promise<boolean>;
   clearConversation: (projectPath: string | null) => Promise<StoreSetResult>;
   onStream: (callback: (chunk: string) => void) => () => void;
@@ -81,6 +85,7 @@ interface ClaudeAPI {
   approveEdit: (editId: string, filePath?: string, content?: string) => Promise<StoreSetResult>;
   rejectEdit: (editId: string) => Promise<StoreSetResult>;
   onPendingEditAdded: (callback: (edit: PendingEdit) => void) => () => void;
+  onPendingEditUpdated: (callback: (edit: PendingEdit) => void) => () => void;
   onActivity: (callback: (activity: string) => void) => () => void;
 }
 
@@ -235,6 +240,7 @@ interface GitOperationResult {
   success: boolean;
   error?: string;
   output?: string;
+  path?: string; // For worktree:add - the resolved absolute path
 }
 
 interface GitWorktreeListResult {
@@ -297,6 +303,32 @@ interface GitDiffFilesResult {
   error?: string;
 }
 
+interface GitPRReviewComment {
+  id: number;
+  path: string;
+  line: number;
+  body: string;
+  user: string;
+  createdAt: string;
+  side: string;
+  startLine?: number;
+}
+
+interface GitPRIssueComment {
+  id: number;
+  body: string;
+  user: string;
+  createdAt: string;
+}
+
+interface GitPRCommentsResult {
+  success: boolean;
+  prNumber?: number;
+  reviewComments?: GitPRReviewComment[];
+  issueComments?: GitPRIssueComment[];
+  error?: string;
+}
+
 interface ReviewIssue {
   severity: 'error' | 'warning' | 'suggestion';
   startLine: number | null;
@@ -324,6 +356,179 @@ interface ReviewResult {
   error?: string;
 }
 
+// Linear types
+interface LinearUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface LinearTestResult {
+  success: boolean;
+  user?: LinearUser;
+  error?: string;
+}
+
+interface LinearLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface LinearState {
+  id: string;
+  name: string;
+  color: string;
+  type: string;
+}
+
+interface LinearProject {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string;
+  priority: number;
+  state: LinearState;
+  labels: { nodes: LinearLabel[] };
+  project?: LinearProject;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LinearAssignee {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+}
+
+interface LinearCreator {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface LinearCommentUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+}
+
+interface LinearComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  user: LinearCommentUser;
+}
+
+interface LinearAttachment {
+  id: string;
+  title: string;
+  url: string;
+  sourceType: string;
+}
+
+interface LinearChildIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  state: { name: string; color: string };
+}
+
+interface LinearParentIssue {
+  id: string;
+  identifier: string;
+  title: string;
+}
+
+interface LinearIssueDetail {
+  id: string;
+  identifier: string;
+  title: string;
+  description?: string;
+  priority: number;
+  estimate?: number;
+  dueDate?: string;
+  url: string;
+  branchName?: string;
+  state: LinearState;
+  labels: { nodes: LinearLabel[] };
+  project?: LinearProject;
+  assignee?: LinearAssignee;
+  creator?: LinearCreator;
+  comments: { nodes: LinearComment[] };
+  attachments: { nodes: LinearAttachment[] };
+  parent?: LinearParentIssue;
+  children: { nodes: LinearChildIssue[] };
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LinearIssuesResult {
+  success: boolean;
+  issues?: LinearIssue[];
+  error?: string;
+}
+
+interface LinearIssueDetailResult {
+  success: boolean;
+  issue?: LinearIssueDetail;
+  error?: string;
+}
+
+interface LinearSummaryInput {
+  identifier: string;
+  title: string;
+  description?: string;
+  comments: Array<{ body: string; user: { name: string }; createdAt: string }>;
+}
+
+interface LinearSummaryResult {
+  success: boolean;
+  summary?: string;
+  cached?: boolean;
+  error?: string;
+}
+
+interface LinearCreateCommentResult {
+  success: boolean;
+  comment?: {
+    id: string;
+    body: string;
+    createdAt: string;
+    user: { id: string; name: string; email: string };
+  };
+  error?: string;
+}
+
+interface LinearUpdateIssueResult {
+  success: boolean;
+  issue?: {
+    id: string;
+    state: { id: string; name: string };
+  };
+  error?: string;
+}
+
+interface LinearAPI {
+  test: (apiKey: string) => Promise<LinearTestResult>;
+  getMyIssues: (apiKey: string) => Promise<LinearIssuesResult>;
+  getIssue: (apiKey: string, issueId: string) => Promise<LinearIssueDetailResult>;
+  createComment: (apiKey: string, issueId: string, body: string) => Promise<LinearCreateCommentResult>;
+  deleteComment: (apiKey: string, commentId: string) => Promise<{ success: boolean; error?: string }>;
+  getIssueStates: (apiKey: string, issueId: string) => Promise<{ success: boolean; states?: Array<{ id: string; name: string; color: string; type: string }>; error?: string }>;
+  updateIssue: (apiKey: string, issueId: string, updates: { stateId?: string; stateName?: string }) => Promise<LinearUpdateIssueResult>;
+  generateSummary: (issueData: LinearSummaryInput) => Promise<LinearSummaryResult>;
+}
+
 interface GitAPI {
   isRepo: (projectPath: string) => Promise<GitIsRepoResult>;
   branch: (projectPath: string) => Promise<GitBranchResult>;
@@ -337,6 +542,7 @@ interface GitAPI {
   fetch: (projectPath: string) => Promise<GitOperationResult>;
   createBranch: (projectPath: string, branchName: string, checkout?: boolean) => Promise<GitOperationResult>;
   checkout: (projectPath: string, branchName: string) => Promise<GitOperationResult>;
+  restore: (projectPath: string) => Promise<GitOperationResult>;
   worktree: {
     list: (projectPath: string) => Promise<GitWorktreeListResult>;
     add: (projectPath: string, worktreePath: string, branch: string, createBranch?: boolean) => Promise<GitOperationResult>;
@@ -345,8 +551,12 @@ interface GitAPI {
   pr: {
     create: (projectPath: string, options: { title: string; body: string; base: string }) => Promise<GitPRCreateResult>;
     list: (projectPath: string) => Promise<GitPRListResult>;
+    template: (projectPath: string) => Promise<{ success: boolean; template: string | null; path?: string }>;
+    comments: (projectPath: string) => Promise<GitPRCommentsResult>;
     review: (projectPath: string, options: GitPRReviewOptions) => Promise<GitPRReviewResult>;
+    onReviewProgress: (callback: (progress: { batch: number; total: number; status: 'pending' | 'sending' | 'success' | 'failed' | 'rolling-back' }) => void) => () => void;
   };
+  defaultBranch: (projectPath: string) => Promise<{ success: boolean; branch: string }>;
   protectedBranches: (projectPath: string) => Promise<GitProtectedBranchesResult>;
   diff: (projectPath: string, staged?: boolean) => Promise<GitDiffResult>;
   diffFiles: (projectPath: string, baseBranch?: string) => Promise<GitDiffFilesResult>;
@@ -357,10 +567,16 @@ interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
+  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  onSystemSleep: (callback: () => void) => () => void;
+  onSystemWake: (callback: () => void) => () => void;
   openFolder: () => Promise<string | null>;
   readFile: (path: string) => Promise<ReadFileResult>;
+  readImageFile: (path: string) => Promise<{ success: boolean; data?: string; error?: string }>;
   writeFile: (path: string, content: string) => Promise<WriteFileResult>;
   readDir: (path: string) => Promise<ReadDirResult>;
+  deleteFile: (path: string) => Promise<WriteFileResult>;
+  renameFile: (oldPath: string, newPath: string) => Promise<WriteFileResult>;
   loadTypes: (projectPath: string) => Promise<LoadTypesResult>;
   watchDir: (path: string) => Promise<WatchResult>;
   unwatchDir: () => Promise<WatchResult>;
@@ -369,6 +585,7 @@ interface ElectronAPI {
   claude: ClaudeAPI;
   terminal: TerminalAPI;
   lsp: LSPAPI;
+  linear: LinearAPI;
   git: GitAPI;
   detectTests: (projectPath: string, framework?: string) => Promise<RunTestsResult>;
   runTests: (projectPath: string, testFile?: string, testName?: string, framework?: string) => Promise<RunTestsResult>;
