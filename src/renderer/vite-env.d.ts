@@ -76,6 +76,14 @@ interface ClaudeSendOptions {
   planOnly?: boolean; // Restrict to read-only tools (for planning phase)
 }
 
+interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+}
+
 interface ClaudeAPI {
   send: (message: string, context: ChatContext, projectPath: string | null, options?: ClaudeSendOptions) => Promise<ClaudeSendResult>;
   checkInstalled: () => Promise<boolean>;
@@ -87,6 +95,7 @@ interface ClaudeAPI {
   onPendingEditAdded: (callback: (edit: PendingEdit) => void) => () => void;
   onPendingEditUpdated: (callback: (edit: PendingEdit) => void) => () => void;
   onActivity: (callback: (activity: string) => void) => () => void;
+  onUsage: (callback: (data: { projectPath: string; usage: TokenUsage }) => void) => () => void;
 }
 
 interface TerminalCreateResult {
@@ -547,6 +556,12 @@ interface GitAPI {
     list: (projectPath: string) => Promise<GitWorktreeListResult>;
     add: (projectPath: string, worktreePath: string, branch: string, createBranch?: boolean) => Promise<GitOperationResult>;
     remove: (projectPath: string, worktreePath: string) => Promise<GitOperationResult>;
+    saveDiff: (worktreePath: string, sessionId: string, baseBranch?: string) => Promise<{ success: boolean; path?: string; base?: string; diffLength?: number; error?: string }>;
+    readDiff: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; diff?: string; path?: string; error?: string }>;
+    deleteDiff: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; error?: string }>;
+    updateTokenUsage: (worktreePath: string, sessionId: string, usage: TokenUsage) => Promise<{ success: boolean; total?: TokenUsage & { isClosed?: boolean }; error?: string }>;
+    readTokenUsage: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; usage?: TokenUsage & { isClosed?: boolean }; error?: string }>;
+    closeTokenUsage: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; error?: string }>;
   };
   pr: {
     create: (projectPath: string, options: { title: string; body: string; base: string }) => Promise<GitPRCreateResult>;
@@ -591,6 +606,10 @@ interface ElectronAPI {
   runTests: (projectPath: string, testFile?: string, testName?: string, framework?: string) => Promise<RunTestsResult>;
   detectTestFrameworks: (projectPath: string) => Promise<DetectFrameworksResult>;
   review: (projectPath: string, fileContent: string, filePath: string, diff: string, context: { skills: string; rules: string }) => Promise<ReviewResult>;
+  testUpdate: () => Promise<void>;
+  onUpdateAvailable: (callback: (event: unknown, info: { version: string }) => void) => () => void;
+  onUpdateDownloaded: (callback: (event: unknown, info: { version: string }) => void) => () => void;
+  restartAndUpdate: () => void;
 }
 
 declare global {

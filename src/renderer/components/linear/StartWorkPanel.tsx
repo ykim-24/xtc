@@ -4,7 +4,7 @@ import { FolderOpen, ChevronRight, Check, X, Minus } from 'lucide-react';
 import { PixelGit } from '@/components/feature-sidebar/PixelIcons';
 import { formatClaudeStream } from '@/services/claudeStreamFormatter';
 import { useWorktreeStore } from '@/stores/worktreeStore';
-import { useTestStore, useProjectStore, useStartWorkStore, type LogEntry, type PlanStep, type StartWorkStep } from '@/stores';
+import { useTestStore, useProjectStore, useStartWorkStore, type LogEntry, type PlanStep, type StartWorkStep, type PlanQuestion } from '@/stores';
 
 // Standalone implementation runner that persists after modal closes
 // This runs outside the React component lifecycle
@@ -13,6 +13,7 @@ async function runBackgroundImplementationDetached(
   userContext: string,
   planSteps: Array<{ description: string; files?: string[] }>,
   issue: { identifier: string; title: string; description?: string },
+  sessionId: string,
   appendOutput: (path: string, chunk: string) => void,
   complete: (path: string, success: boolean) => void
 ) {
@@ -49,11 +50,18 @@ Start implementing now. Work through each step methodically.`;
   try {
     console.log('[WorktreeImpl] Setting up stream listener...');
 
+    // Verify session exists before starting
+    const initialSession = useWorktreeStore.getState().sessions[projectPath];
+    console.log('[WorktreeImpl] Session check:', projectPath, 'exists:', !!initialSession);
+
     // Set up stream listener BEFORE making the API call
     let chunkCount = 0;
     const unsubscribe = window.electron?.claude.onStream((chunk: string) => {
       chunkCount++;
-      console.log(`[WorktreeImpl] Received chunk #${chunkCount}, length: ${chunk.length}`);
+      // Log first few chunks and then periodically
+      if (chunkCount <= 3 || chunkCount % 20 === 0) {
+        console.log(`[WorktreeImpl] Received chunk #${chunkCount}, length: ${chunk.length}, preview: ${chunk.substring(0, 100)}`);
+      }
       appendOutput(projectPath, chunk);
     });
 
@@ -66,6 +74,19 @@ Start implementing now. Work through each step methodically.`;
 
     console.log('[WorktreeImpl] Claude completed. Total chunks received:', chunkCount);
     unsubscribe?.();
+
+    // Save the diff after implementation completes
+    try {
+      console.log('[WorktreeImpl] Saving worktree diff...');
+      const diffResult = await window.electron?.git.worktree.saveDiff(projectPath, sessionId);
+      if (diffResult?.success) {
+        console.log('[WorktreeImpl] Diff saved:', diffResult.path, 'length:', diffResult.diffLength);
+      } else {
+        console.warn('[WorktreeImpl] Failed to save diff:', diffResult?.error);
+      }
+    } catch (diffError) {
+      console.warn('[WorktreeImpl] Error saving diff:', diffError);
+    }
 
     if (result?.success) {
       console.log('[WorktreeImpl] Success!');
@@ -226,6 +247,7 @@ export function StartWorkPanel({ isOpen, onClose, onMinimize, issue, sessionId: 
   const selectedRepo = session?.selectedRepo || null;
   const worktreePath = session?.worktreePath || null;
   const planSteps = session?.planSteps || [];
+  const questions = session?.questions || [];
   const streamingOutput = session?.streamingOutput || '';
   const needsInput = session?.needsInput || false;
   const isProcessing = session?.isProcessing || false;
@@ -505,6 +527,22 @@ export function StartWorkPanel({ isOpen, onClose, onMinimize, issue, sessionId: 
     store.addLog(currentSessionId, { type: 'success', message: 'Worktree created successfully' });
     store.setWorktreePath(currentSessionId, resolvedWorktreePath);
 
+    // Start session in worktree store with "planning" status
+    const ticketInfo = {
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      description: issue.description,
+    };
+    worktreeStore.startSession(resolvedWorktreePath, ticketInfo);
+    worktreeStore.setSessionStatus(resolvedWorktreePath, 'planning');
+
+    // Set the newly created worktree as the active project
+    setProjectPath(resolvedWorktreePath);
+
+    // Switch to worktrees panel
+    setMode('worktrees');
+
     await analyzeAndPlan(resolvedWorktreePath);
   };
 
@@ -627,39 +665,44 @@ FILES: [files]
           store.addLog(currentSessionId, { type: 'analysis', message: '└──────────────────────────────────────────────────────────────' });
         }
 
-        // Show questions if any
+        // Show questions if any - open modal for user to answer
         if (questionsMatch) {
-          const questions = questionsMatch[1].trim();
-          if (questions.toLowerCase() !== 'none' && questions.length > 0) {
+          const questionsText = questionsMatch[1].trim();
+          if (questionsText.toLowerCase() !== 'none' && questionsText.length > 0) {
             store.addLog(currentSessionId, { type: 'info', message: '' });
-            store.addLog(currentSessionId, { type: 'warning', message: '┌─ Questions ──────────────────────────────────────────────────' });
+            store.addLog(currentSessionId, { type: 'warning', message: 'Claude has questions - opening Q&A...' });
 
-            // Parse and format questions
-            const questionLines = questions.split('\n').filter(l => l.trim());
-            questionLines.forEach(line => {
-              const trimmed = line.trim()
-                .replace(/\*\*/g, '')
-                .replace(/^[-+•]\s*/, '')
-                .replace(/^\d+\.\s*/, '');
-              if (trimmed) {
-                store.addLog(currentSessionId, { type: 'warning', message: `  - ${trimmed}` });
-              }
-            });
+            // Parse questions into structured format
+            const questionLines = questionsText.split('\n').filter(l => l.trim());
+            const parsedQuestions: PlanQuestion[] = questionLines
+              .map((line, idx) => {
+                const trimmed = line.trim()
+                  .replace(/\*\*/g, '')
+                  .replace(/^[-+•]\s*/, '')
+                  .replace(/^\d+\.\s*/, '');
+                if (trimmed && trimmed.length > 5) {
+                  return {
+                    id: `q-${idx}`,
+                    question: trimmed,
+                    answer: '',
+                  };
+                }
+                return null;
+              })
+              .filter((q): q is PlanQuestion => q !== null);
 
-            store.addLog(currentSessionId, { type: 'warning', message: '└──────────────────────────────────────────────────────────────' });
-
-            // Ask user for additional context
-            store.addLog(currentSessionId, { type: 'info', message: '' });
-            store.addLog(currentSessionId, { type: 'prompt', message: 'Provide additional context? (enter text or press Enter to skip)' });
-            store.setStep(currentSessionId, 'plan-review');
-            store.setNeedsInput(currentSessionId, true);
-            store.setProcessing(currentSessionId, false);
-
-            // Parse plan steps for later
+            // Store questions and plan steps
+            store.setQuestions(currentSessionId, parsedQuestions);
             if (planMatch) {
               const steps = parsePlanSteps(planMatch[1]);
               store.setPlanSteps(currentSessionId, steps);
             }
+
+            store.setStep(currentSessionId, 'plan-review');
+            store.setProcessing(currentSessionId, false);
+
+            // Show the questions modal at root level
+            store.openQuestionsModal(currentSessionId);
             return;
           }
         }
@@ -767,8 +810,8 @@ FILES: [files]
           description: issue.description,
         };
 
-        // Start session in worktree store
-        worktreeStore.startSession(capturedPath, capturedIssue);
+        // Switch from planning to running status
+        worktreeStore.setSessionStatus(capturedPath, 'running');
 
         // Switch to the worktree
         setProjectPath(capturedPath);
@@ -784,14 +827,19 @@ FILES: [files]
 
         // Run implementation in background
         setTimeout(() => {
-          const wtStore = useWorktreeStore.getState();
           runBackgroundImplementationDetached(
             capturedPath,
             '',
             capturedPlanSteps,
             capturedIssue,
-            wtStore.appendImplementationOutput,
-            wtStore.completeSession
+            capturedIssue.identifier, // Use ticket identifier as session ID for diff
+            // Use arrow functions to ensure we always get the latest store state
+            (path: string, chunk: string) => {
+              useWorktreeStore.getState().appendImplementationOutput(path, chunk);
+            },
+            (path: string, success: boolean) => {
+              useWorktreeStore.getState().completeSession(path, success);
+            }
           );
         }, 100);
       }
@@ -837,8 +885,8 @@ FILES: [files]
             description: issue.description,
           };
 
-          // Start session in worktree store with Linear ticket info
-          worktreeStore.startSession(capturedPath, capturedIssue);
+          // Switch from planning to running status
+          worktreeStore.setSessionStatus(capturedPath, 'running');
 
           // Switch to the worktree
           setProjectPath(capturedPath);
@@ -854,14 +902,19 @@ FILES: [files]
 
           // Run implementation in background with direct store access
           setTimeout(() => {
-            const wtStore = useWorktreeStore.getState();
             runBackgroundImplementationDetached(
               capturedPath,
               capturedContext,
               capturedPlanSteps,
               capturedIssue,
-              wtStore.appendImplementationOutput,
-              wtStore.completeSession
+              capturedIssue.identifier, // Use ticket identifier as session ID for diff
+              // Use arrow functions to ensure we always get the latest store state
+              (path: string, chunk: string) => {
+                useWorktreeStore.getState().appendImplementationOutput(path, chunk);
+              },
+              (path: string, success: boolean) => {
+                useWorktreeStore.getState().completeSession(path, success);
+              }
             );
           }, 100);
         }
@@ -919,12 +972,6 @@ FILES: [files]
             <span className="text-sm font-mono text-text-primary">{issue.identifier}</span>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={runTestFlow}
-              className="text-xs font-mono text-text-muted hover:text-purple-400 transition-colors"
-            >
-              [ test ]
-            </button>
             {worktreePath && (
               <span className="text-xs text-green-400 font-mono">
                 ✓ worktree ready

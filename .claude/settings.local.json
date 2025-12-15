@@ -11,7 +11,8 @@
       "Bash(for id in 2599654143 2599654149 2599654152 2599654159 2599654165 2599654169 2599654174 2599654177 2599654180 2599654185)",
       "WebFetch(domain:www.randomnoun.com)",
       "Bash(curl:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

@@ -5,6 +5,7 @@ import { useSkillsStore } from './skillsStore';
 import { useContextStore } from './contextStore';
 import { useTestStore } from './testStore';
 import { useProjectStore } from './projectStore';
+import { useWorktreeStore } from './worktreeStore';
 
 export interface PendingEdit {
   id: string;
@@ -117,6 +118,12 @@ export const useEditsStore = create<EditsState>((set, get) => ({
         useTestStore.getState().restorePreviousMode();
       }
 
+      // Update worktree diff if we're in a worktree session
+      const { projectPath } = useProjectStore.getState();
+      if (projectPath) {
+        useWorktreeStore.getState().updateWorktreeDiff(projectPath);
+      }
+
       return true;
     }
     return false;
@@ -149,6 +156,12 @@ export const useEditsStore = create<EditsState>((set, get) => ({
       // Restore previous mode if all edits are done
       if (get().pendingEdits.length === 0) {
         useTestStore.getState().restorePreviousMode();
+      }
+
+      // Update worktree diff if we're in a worktree session
+      const { projectPath } = useProjectStore.getState();
+      if (projectPath) {
+        useWorktreeStore.getState().updateWorktreeDiff(projectPath);
       }
 
       return true;
@@ -194,6 +207,12 @@ export const useEditsStore = create<EditsState>((set, get) => ({
       // Restore previous mode if all edits are done
       if (get().pendingEdits.length === 0) {
         useTestStore.getState().restorePreviousMode();
+      }
+
+      // Update worktree diff if we're in a worktree session
+      const { projectPath } = useProjectStore.getState();
+      if (projectPath) {
+        useWorktreeStore.getState().updateWorktreeDiff(projectPath);
       }
 
       return { success: true, ruleCreated: newRule.name };

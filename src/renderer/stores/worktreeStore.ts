@@ -38,6 +38,9 @@ interface WorktreeState {
   getSession: (worktreePath: string) => WorkSession | undefined;
   getSessionStatus: (worktreePath: string) => WorktreeStatus;
   hasActiveSession: (worktreePath: string) => boolean;
+
+  // Diff management
+  updateWorktreeDiff: (worktreePath: string) => Promise<void>;
 }
 
 export const useWorktreeStore = create<WorktreeState>((set, get) => ({
@@ -186,5 +189,25 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
   hasActiveSession: (worktreePath) => {
     const session = get().sessions[worktreePath];
     return session?.status === 'running';
+  },
+
+  updateWorktreeDiff: async (worktreePath) => {
+    const session = get().sessions[worktreePath];
+    if (!session?.linearTicket?.identifier) {
+      console.log('[WorktreeStore] No session or ticket identifier found for:', worktreePath);
+      return;
+    }
+
+    try {
+      console.log('[WorktreeStore] Updating diff for:', worktreePath, 'session:', session.linearTicket.identifier);
+      const result = await window.electron?.git.worktree.saveDiff(worktreePath, session.linearTicket.identifier);
+      if (result?.success) {
+        console.log('[WorktreeStore] Diff updated:', result.path, 'length:', result.diffLength);
+      } else {
+        console.warn('[WorktreeStore] Failed to update diff:', result?.error);
+      }
+    } catch (error) {
+      console.warn('[WorktreeStore] Error updating diff:', error);
+    }
   },
 }));

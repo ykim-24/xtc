@@ -248,7 +248,7 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
                         className="p-3 rounded border border-border-primary bg-[#0d1117] font-mono text-xs max-h-[200px] overflow-auto"
                       >
                         {planningSession.logs.map((log, i) => (
-                          <div key={i} className={`${getLogColor(log.type)} whitespace-pre`}>
+                          <div key={i} className={`${getLineColor(log.type)} whitespace-pre`}>
                             {'  '.repeat(log.indent || 0)}
                             {getLogPrefix(log.type) && (
                               <span className="opacity-60">{getLogPrefix(log.type)} </span>
@@ -303,7 +303,7 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
               )}
 
               {/* Implementation output - show streaming or formatted */}
-              {(session.implementationOutput || status === 'running') && (
+              {(session?.implementationOutput || status === 'running') && (
                 <div className="space-y-1">
                   <h4 className="text-xs font-medium text-text-muted uppercase tracking-wide flex items-center gap-2">
                     Implementation
@@ -313,7 +313,7 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
                   </h4>
                   <div
                     ref={outputRef}
-                    className="p-3 rounded border border-border-primary bg-bg-primary font-mono text-xs max-h-[300px] overflow-auto"
+                    className="p-3 rounded border border-border-primary bg-bg-primary font-mono text-xs max-h-[300px] overflow-auto whitespace-pre-wrap"
                   >
                     {formattedImplementation.length > 0 ? (
                       formattedImplementation.map((line, i) => (
@@ -321,6 +321,12 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
                           {line.content}
                         </div>
                       ))
+                    ) : session?.implementationOutput ? (
+                      // Show raw output if formatter couldn't process it
+                      // Unescape common escape sequences for better readability
+                      <div className="text-text-secondary">
+                        {unescapeOutput(session.implementationOutput)}
+                      </div>
                     ) : status === 'running' ? (
                       <div className="text-text-muted animate-pulse">Waiting for output...</div>
                     ) : null}
@@ -392,4 +398,17 @@ function getLogPrefix(type: string): string {
     case 'prompt': return '[action]';
     default: return '';
   }
+}
+
+/**
+ * Unescape common escape sequences in raw output for better readability
+ */
+function unescapeOutput(str: string): string {
+  return str
+    .replace(/\\n/g, '\n')      // Escaped newlines
+    .replace(/\\t/g, '  ')      // Escaped tabs to 2 spaces
+    .replace(/\\r/g, '')        // Carriage returns
+    .replace(/\\"/g, '"')       // Escaped double quotes
+    .replace(/\\'/g, "'")       // Escaped single quotes
+    .replace(/\\\\/g, '\\');    // Escaped backslashes
 }

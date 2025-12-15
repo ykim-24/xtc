@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal, Wrench } from 'lucide-react';
+import { ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal } from 'lucide-react';
 import { PixelGit } from '@/components/feature-sidebar/PixelIcons';
 import { clsx } from 'clsx';
-import { useGitStore, useProjectStore, useTestStore, useChatStore } from '@/stores';
+import { useGitStore, useProjectStore, useTestStore, useChatStore, useWorktreeStore } from '@/stores';
 import { ReviewPanel } from './ReviewPanel';
+import { ConfirmModal } from '@/components/ui';
 import globeToFolderGif from '@/assets/globe-to-folder.gif';
 
 const statusIcons: Record<string, string> = {
@@ -153,6 +154,8 @@ export function GitPanel() {
   const [newBranchName, setNewBranchName] = useState('');
   const [prCommentCount, setPrCommentCount] = useState(0);
   const [isFixing, setIsFixing] = useState(false);
+  const [tokenUsage, setTokenUsage] = useState<{ inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; isClosed?: boolean } | null>(null);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newBranchRef = useRef<HTMLDivElement>(null);
@@ -228,6 +231,38 @@ export function GitPanel() {
     };
     fetchPRComments();
   }, [projectPath, currentBranch]);
+
+  // Load token usage for worktree sessions
+  useEffect(() => {
+    const loadTokenUsage = async () => {
+      if (!projectPath) {
+        setTokenUsage(null);
+        return;
+      }
+
+      // Check if this projectPath has a worktree session
+      const session = useWorktreeStore.getState().getSession(projectPath);
+      if (session?.linearTicket?.identifier) {
+        try {
+          const result = await window.electron?.git.worktree.readTokenUsage(projectPath, session.linearTicket.identifier);
+          if (result?.success && result.usage) {
+            setTokenUsage(result.usage);
+          } else {
+            setTokenUsage(null);
+          }
+        } catch {
+          setTokenUsage(null);
+        }
+      } else {
+        setTokenUsage(null);
+      }
+    };
+    loadTokenUsage();
+
+    // Reload periodically to catch updates from Claude usage events
+    const interval = setInterval(loadTokenUsage, 5000);
+    return () => clearInterval(interval);
+  }, [projectPath]);
 
   // Handle fix - send PR comments to Claude
   const handleFix = async () => {
@@ -342,9 +377,11 @@ export function GitPanel() {
 
   const handleRestoreAll = async () => {
     if (!projectPath) return;
-    if (!confirm('Discard all changes? This will restore all modified files and remove untracked files.')) {
-      return;
-    }
+    setShowDiscardConfirm(true);
+  };
+
+  const confirmRestoreAll = async () => {
+    if (!projectPath) return;
 
     setIsRestoring(true);
     try {
@@ -448,6 +485,18 @@ export function GitPanel() {
 
   return (
     <div className="flex flex-col h-full bg-bg-primary relative">
+      {/* Discard changes confirmation modal */}
+      <ConfirmModal
+        isOpen={showDiscardConfirm}
+        onClose={() => setShowDiscardConfirm(false)}
+        onConfirm={confirmRestoreAll}
+        title="Discard Changes"
+        message="This will restore all modified files and remove untracked files. This action cannot be undone."
+        confirmText="Discard"
+        cancelText="Cancel"
+        variant="danger"
+      />
+
       {/* Fetching modal - Windows 98 style */}
       {isFetching && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -730,6 +779,19 @@ export function GitPanel() {
                   {behind}
                 </span>
               )}
+            </span>
+          )}
+          {tokenUsage && tokenUsage.costUsd > 0 && (
+            <span
+              className={clsx(
+                'text-xs font-mono px-1.5 py-0.5 rounded',
+                tokenUsage.isClosed
+                  ? 'bg-text-muted/10 text-text-muted'
+                  : 'bg-accent-primary/10 text-accent-primary'
+              )}
+              title={`Input: ${tokenUsage.inputTokens.toLocaleString()} | Output: ${tokenUsage.outputTokens.toLocaleString()} | Cache Read: ${tokenUsage.cacheReadTokens.toLocaleString()} | Cache Write: ${tokenUsage.cacheWriteTokens.toLocaleString()}${tokenUsage.isClosed ? ' (closed)' : ''}`}
+            >
+              ${tokenUsage.costUsd.toFixed(2)}
             </span>
           )}
         </div>

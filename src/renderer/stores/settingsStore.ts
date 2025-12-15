@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { ThemeName } from '@/themes/tokens';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { ThemeName } from "@/themes/tokens";
 
 interface SettingsState {
   // User
@@ -26,16 +26,20 @@ interface SettingsState {
   setTabSize: (size: number) => void;
   wordWrap: boolean;
   setWordWrap: (wrap: boolean) => void;
-  lineNumbers: 'on' | 'off' | 'relative';
-  setLineNumbers: (value: 'on' | 'off' | 'relative') => void;
+  lineNumbers: "on" | "off" | "relative";
+  setLineNumbers: (value: "on" | "off" | "relative") => void;
   minimap: boolean;
   setMinimap: (show: boolean) => void;
-  cursorBlinking: 'blink' | 'smooth' | 'phase' | 'expand' | 'solid';
-  setCursorBlinking: (style: 'blink' | 'smooth' | 'phase' | 'expand' | 'solid') => void;
-  cursorStyle: 'line' | 'block' | 'underline';
-  setCursorStyle: (style: 'line' | 'block' | 'underline') => void;
-  renderWhitespace: 'none' | 'boundary' | 'selection' | 'trailing' | 'all';
-  setRenderWhitespace: (value: 'none' | 'boundary' | 'selection' | 'trailing' | 'all') => void;
+  cursorBlinking: "blink" | "smooth" | "phase" | "expand" | "solid";
+  setCursorBlinking: (
+    style: "blink" | "smooth" | "phase" | "expand" | "solid"
+  ) => void;
+  cursorStyle: "line" | "block" | "underline";
+  setCursorStyle: (style: "line" | "block" | "underline") => void;
+  renderWhitespace: "none" | "boundary" | "selection" | "trailing" | "all";
+  setRenderWhitespace: (
+    value: "none" | "boundary" | "selection" | "trailing" | "all"
+  ) => void;
   bracketPairColorization: boolean;
   setBracketPairColorization: (enabled: boolean) => void;
   autoClosingBrackets: boolean;
@@ -80,42 +84,46 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       // User
-      userName: '',
+      userName: "",
       setUserName: (userName) => set({ userName }),
       hasCompletedOnboarding: false,
-      setHasCompletedOnboarding: (hasCompletedOnboarding) => set({ hasCompletedOnboarding }),
+      setHasCompletedOnboarding: (hasCompletedOnboarding) =>
+        set({ hasCompletedOnboarding }),
 
       // Appearance
-      theme: 'dark',
+      theme: "dark",
       setTheme: (theme) => set({ theme }),
 
       // Prompt settings
       showEnhancedPrompt: false,
-      setShowEnhancedPrompt: (showEnhancedPrompt) => set({ showEnhancedPrompt }),
+      setShowEnhancedPrompt: (showEnhancedPrompt) =>
+        set({ showEnhancedPrompt }),
 
       // Editor settings
       fontSize: 13,
       setFontSize: (fontSize) => set({ fontSize }),
-      fontFamily: 'Monaco',
+      fontFamily: "Monaco",
       setFontFamily: (fontFamily) => set({ fontFamily }),
       tabSize: 2,
       setTabSize: (tabSize) => set({ tabSize }),
       wordWrap: true,
       setWordWrap: (wordWrap) => set({ wordWrap }),
-      lineNumbers: 'on',
+      lineNumbers: "on",
       setLineNumbers: (lineNumbers) => set({ lineNumbers }),
       minimap: true,
       setMinimap: (minimap) => set({ minimap }),
-      cursorBlinking: 'blink',
+      cursorBlinking: "blink",
       setCursorBlinking: (cursorBlinking) => set({ cursorBlinking }),
-      cursorStyle: 'line',
+      cursorStyle: "line",
       setCursorStyle: (cursorStyle) => set({ cursorStyle }),
-      renderWhitespace: 'selection',
+      renderWhitespace: "selection",
       setRenderWhitespace: (renderWhitespace) => set({ renderWhitespace }),
       bracketPairColorization: true,
-      setBracketPairColorization: (bracketPairColorization) => set({ bracketPairColorization }),
+      setBracketPairColorization: (bracketPairColorization) =>
+        set({ bracketPairColorization }),
       autoClosingBrackets: true,
-      setAutoClosingBrackets: (autoClosingBrackets) => set({ autoClosingBrackets }),
+      setAutoClosingBrackets: (autoClosingBrackets) =>
+        set({ autoClosingBrackets }),
       formatOnSave: false,
       setFormatOnSave: (formatOnSave) => set({ formatOnSave }),
       formatOnPaste: false,
@@ -123,7 +131,8 @@ export const useSettingsStore = create<SettingsState>()(
       lineHeight: 1.5,
       setLineHeight: (lineHeight) => set({ lineHeight }),
       scrollBeyondLastLine: true,
-      setScrollBeyondLastLine: (scrollBeyondLastLine) => set({ scrollBeyondLastLine }),
+      setScrollBeyondLastLine: (scrollBeyondLastLine) =>
+        set({ scrollBeyondLastLine }),
       smoothScrolling: true,
       setSmoothScrolling: (smoothScrolling) => set({ smoothScrolling }),
 
@@ -152,7 +161,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoDetectContext: (autoDetectContext) => set({ autoDetectContext }),
     }),
     {
-      name: 'xtc-settings',
+      name: "xtc-settings",
     }
   )
 );

@@ -29,6 +29,22 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('dialog:openFile', options),
   },
 
+  // Dev: Test update dialog (call from DevTools: window.electron.testUpdate())
+  testUpdate: () => ipcRenderer.invoke('dev:test-update'),
+
+  // Auto-update events
+  onUpdateAvailable: (callback: (event: unknown, info: { version: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: { version: string }) => callback(_event, info);
+    ipcRenderer.on('update-available', handler);
+    return () => ipcRenderer.removeListener('update-available', handler);
+  },
+  onUpdateDownloaded: (callback: (event: unknown, info: { version: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: { version: string }) => callback(_event, info);
+    ipcRenderer.on('update-downloaded', handler);
+    return () => ipcRenderer.removeListener('update-downloaded', handler);
+  },
+  restartAndUpdate: () => ipcRenderer.send('update:restart'),
+
   // File operations
   readFile: (path: string) => ipcRenderer.invoke('file:read', path),
   readImageFile: (path: string) => ipcRenderer.invoke('file:readImage', path),
@@ -82,6 +98,11 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_event: Electron.IpcRendererEvent, activity: string) => callback(activity);
       ipcRenderer.on('claude:activity', handler);
       return () => ipcRenderer.removeListener('claude:activity', handler);
+    },
+    onUsage: (callback: (data: { projectPath: string; usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number } }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { projectPath: string; usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number } }) => callback(data);
+      ipcRenderer.on('claude:usage', handler);
+      return () => ipcRenderer.removeListener('claude:usage', handler);
     },
   },
 
@@ -172,6 +193,18 @@ contextBridge.exposeInMainWorld('electron', {
         ipcRenderer.invoke('git:worktree:add', projectPath, worktreePath, branch, createBranch),
       remove: (projectPath: string, worktreePath: string) =>
         ipcRenderer.invoke('git:worktree:remove', projectPath, worktreePath),
+      saveDiff: (worktreePath: string, sessionId: string, baseBranch?: string) =>
+        ipcRenderer.invoke('git:worktree:saveDiff', worktreePath, sessionId, baseBranch),
+      readDiff: (worktreePath: string, sessionId: string) =>
+        ipcRenderer.invoke('git:worktree:readDiff', worktreePath, sessionId),
+      deleteDiff: (worktreePath: string, sessionId: string) =>
+        ipcRenderer.invoke('git:worktree:deleteDiff', worktreePath, sessionId),
+      updateTokenUsage: (worktreePath: string, sessionId: string, usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number }) =>
+        ipcRenderer.invoke('git:worktree:updateTokenUsage', worktreePath, sessionId, usage),
+      readTokenUsage: (worktreePath: string, sessionId: string) =>
+        ipcRenderer.invoke('git:worktree:readTokenUsage', worktreePath, sessionId),
+      closeTokenUsage: (worktreePath: string, sessionId: string) =>
+        ipcRenderer.invoke('git:worktree:closeTokenUsage', worktreePath, sessionId),
     },
     pr: {
       create: (projectPath: string, options: { title: string; body: string; base: string }) =>

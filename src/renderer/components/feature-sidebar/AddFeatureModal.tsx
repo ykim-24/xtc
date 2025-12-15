@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
-import { PixelLinear } from './PixelIcons';
+import { PixelLinear, PixelDatadog } from './PixelIcons';
 
 interface AddFeatureModalProps {
   isOpen: boolean;
@@ -13,6 +13,7 @@ interface Integration {
   name: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
+  comingSoon?: boolean;
 }
 
 interface LogEntry {
@@ -26,6 +27,13 @@ const integrations: Integration[] = [
     name: 'Linear',
     description: 'Issue tracking and project management',
     icon: PixelLinear,
+  },
+  {
+    id: 'datadog',
+    name: 'Datadog',
+    description: 'Dashboards, monitoring, logs, and APM insights',
+    icon: PixelDatadog,
+    comingSoon: true,
   },
 ];
 
@@ -199,21 +207,37 @@ export function AddFeatureModal({ isOpen, onClose, onIntegrationChange }: AddFea
             {integrations.map((integration) => {
               const Icon = integration.icon;
               const isIntegrationConnected = connectedIntegrations.has(integration.id);
+              const isComingSoon = integration.comingSoon;
               return (
                 <button
                   key={integration.id}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg bg-bg-tertiary hover:bg-bg-hover transition-colors text-left"
-                  onClick={() => isIntegrationConnected ? handleDisconnect(integration) : handleConnect(integration)}
+                  className={`w-full flex items-center gap-3 p-3 rounded-lg bg-bg-tertiary transition-colors text-left ${
+                    isComingSoon ? 'opacity-60 cursor-not-allowed' : 'hover:bg-bg-hover'
+                  }`}
+                  onClick={() => !isComingSoon && (isIntegrationConnected ? handleDisconnect(integration) : handleConnect(integration))}
+                  disabled={isComingSoon}
                 >
-                  <div className={`w-10 h-10 flex items-center justify-center rounded-lg ${isIntegrationConnected ? 'bg-green-500/20' : 'bg-bg-secondary'}`}>
-                    <Icon className={`w-6 h-6 ${isIntegrationConnected ? 'text-green-400' : 'text-text-primary'}`} />
+                  <div className={`w-10 h-10 flex items-center justify-center rounded-lg ${
+                    isComingSoon ? 'bg-bg-secondary' : isIntegrationConnected ? 'bg-green-500/20' : 'bg-bg-secondary'
+                  }`}>
+                    <Icon className={`w-6 h-6 ${
+                      isComingSoon ? 'text-text-muted' : isIntegrationConnected ? 'text-green-400' : 'text-text-primary'
+                    }`} />
                   </div>
                   <div className="flex-1">
-                    <div className="text-text-primary font-medium">{integration.name}</div>
+                    <div className={`font-medium ${isComingSoon ? 'text-text-muted' : 'text-text-primary'}`}>
+                      {integration.name}
+                    </div>
                     <div className="text-text-secondary text-sm">{integration.description}</div>
                   </div>
-                  <div className={`text-xs px-2 py-1 rounded ${isIntegrationConnected ? 'bg-green-500/20 text-green-400' : 'bg-bg-secondary text-text-secondary'}`}>
-                    {isIntegrationConnected ? 'Connected' : 'Connect'}
+                  <div className={`text-xs px-2 py-1 rounded ${
+                    isComingSoon
+                      ? 'bg-purple-500/20 text-purple-400'
+                      : isIntegrationConnected
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'bg-bg-secondary text-text-secondary'
+                  }`}>
+                    {isComingSoon ? 'Coming Soon' : isIntegrationConnected ? 'Connected' : 'Connect'}
                   </div>
                 </button>
               );

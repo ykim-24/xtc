@@ -188,6 +188,22 @@ select, option, input, button, textarea {
 
 /* Worktree Node Animated Borders */
 
+/* Spinning yellow border for planning state */
+.worktree-node-planning {
+  position: relative;
+  background: transparent;
+}
+
+.worktree-node-planning::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 0.5rem;
+  background: conic-gradient(from var(--angle, 0deg), #eab308, #facc15, #fde047, #facc15, #eab308);
+  animation: worktree-border-spin 2s linear infinite;
+  z-index: -1;
+}
+
 /* Spinning blue border for running state */
 .worktree-node-running {
   position: relative;
@@ -219,6 +235,12 @@ select, option, input, button, textarea {
 
 /* Fallback spinning animation for browsers without @property support */
 @supports not (background: conic-gradient(from var(--angle), red, blue)) {
+  .worktree-node-planning::before {
+    background: linear-gradient(90deg, #eab308, #facc15, #eab308);
+    background-size: 200% 100%;
+    animation: worktree-gradient-shift 1s linear infinite;
+  }
+
   .worktree-node-running::before {
     background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
     background-size: 200% 100%;

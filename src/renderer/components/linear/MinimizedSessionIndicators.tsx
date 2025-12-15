@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useStartWorkStore } from '@/stores/startWorkStore';
-import { StartWorkPanel } from './StartWorkPanel';
 
 // ASCII spinner frames
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -25,12 +24,14 @@ interface SessionIndicatorProps {
     issueTitle: string;
     needsInput: boolean;
     isProcessing: boolean;
+    hasUnansweredQuestions: boolean;
   };
   onRestore: () => void;
 }
 
 function SessionIndicator({ session, onRestore }: SessionIndicatorProps) {
-  const needsAttention = session.needsInput;
+  // Show red ! for any user input needed (including unanswered questions)
+  const needsAttention = session.needsInput || session.hasUnansweredQuestions;
   const isProcessing = session.isProcessing;
 
   return (
@@ -72,73 +73,43 @@ function SessionIndicator({ session, onRestore }: SessionIndicatorProps) {
 
 export function MinimizedSessionIndicators() {
   const sessions = useStartWorkStore((state) => state.sessions);
-  const restoreSession = useStartWorkStore((state) => state.restoreSession);
+  const openQuestionsModal = useStartWorkStore((state) => state.openQuestionsModal);
+  const openSessionPanel = useStartWorkStore((state) => state.openSessionPanel);
+  const questionsModalSessionId = useStartWorkStore((state) => state.questionsModalSessionId);
+  const activeSessionPanelId = useStartWorkStore((state) => state.activeSessionPanelId);
 
-  // Get minimized sessions
-  const minimizedSessions = Object.values(sessions).filter(s => s.isMinimized);
-
-  // Track which session is being restored to show the modal
-  const [restoringSessionId, setRestoringSessionId] = useState<string | null>(null);
-  const restoringSession = restoringSessionId ? sessions[restoringSessionId] : null;
+  // Get sessions that should show an indicator:
+  // 1. Minimized sessions (but not if their panel is currently open)
+  // 2. Sessions with unanswered questions (when questions modal is closed)
+  const indicatorSessions = Object.values(sessions).filter(s =>
+    (s.isMinimized && activeSessionPanelId !== s.id) ||
+    (s.hasUnansweredQuestions && questionsModalSessionId !== s.id)
+  );
 
   const handleRestore = (sessionId: string) => {
-    restoreSession(sessionId);
-    setRestoringSessionId(sessionId);
+    const session = sessions[sessionId];
+    if (session?.hasUnansweredQuestions) {
+      // If session has unanswered questions, reopen the questions modal
+      openQuestionsModal(sessionId);
+    } else {
+      // Otherwise open the session panel
+      openSessionPanel(sessionId);
+    }
   };
 
-  const handleCloseModal = () => {
-    setRestoringSessionId(null);
-  };
-
-  if (minimizedSessions.length === 0 && !restoringSessionId) {
+  if (indicatorSessions.length === 0) {
     return null;
   }
 
   return (
-    <>
-      {/* Fixed position container in bottom right */}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
-        {minimizedSessions.map((session) => (
-          <SessionIndicator
-            key={session.id}
-            session={session}
-            onRestore={() => handleRestore(session.id)}
-          />
-        ))}
-      </div>
-
-      {/* Modal for restored session */}
-      {restoringSessionId && restoringSession && (
-        <StartWorkPanel
-          isOpen={true}
-          onClose={handleCloseModal}
-          onMinimize={() => {
-            setRestoringSessionId(null);
-          }}
-          issue={{
-            id: restoringSession.issueId,
-            identifier: restoringSession.issueIdentifier,
-            title: restoringSession.issueTitle,
-            description: restoringSession.issueDescription || '',
-            priority: 0,
-            state: { id: '', name: '', color: '#888', type: 'unstarted' },
-            labels: { nodes: [] },
-            project: null,
-            assignee: null,
-            creator: null,
-            dueDate: null,
-            estimate: null,
-            parent: null,
-            children: { nodes: [] },
-            comments: { nodes: [] },
-            attachments: { nodes: [] },
-            createdAt: '',
-            updatedAt: '',
-            branchName: restoringSession.branchName,
-          }}
-          sessionId={restoringSessionId}
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
+      {indicatorSessions.map((session) => (
+        <SessionIndicator
+          key={session.id}
+          session={session}
+          onRestore={() => handleRestore(session.id)}
         />
-      )}
-    </>
+      ))}
+    </div>
   );
 }

@@ -39,5 +39,8 @@ temp/
 .cache/
 CLAUDE.md
 
+# XTC session data (per-project)
+.xtc/
+
 # Release builds
 release/

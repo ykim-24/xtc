@@ -224,11 +224,10 @@ export async function restoreSession(projectPath: string): Promise<boolean> {
       }
     }
 
-    // Restore pending edits
-    if (sessionData.pendingEdits.length > 0) {
-      const editsStore = useEditsStore.getState();
-      editsStore.setPendingEdits(sessionData.pendingEdits);
-    }
+    // NOTE: We no longer restore pending edits from session file.
+    // The main process is the source of truth for pending edits.
+    // Edits are sent via IPC (onPendingEditAdded/onPendingEditUpdated) from main process.
+    // Restoring from session file caused issues where rejected edits would reappear.
 
     // Restore context files (reload content from disk)
     if (sessionData.contextFilePaths.length > 0) {

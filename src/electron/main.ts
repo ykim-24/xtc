@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, session, shell, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, session, shell, powerMonitor, powerSaveBlocker, globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { watch, FSWatcher } from 'fs';
@@ -7,6 +7,9 @@ import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import * as os from 'os';
 import * as crypto from 'crypto';
+// @ts-ignore - electron-updater CommonJS import
+import * as electronUpdater from 'electron-updater';
+const autoUpdater = electronUpdater.autoUpdater;
 import { IGNORED_PATHS } from '../shared/constants/index.js';
 import { lspManager } from './lspManager.js';
 import {
@@ -63,7 +66,8 @@ function createWindow() {
   // Load the app
   if (isDev) {
     mainWindow.loadURL('http://localhost:4321');
-    mainWindow.webContents.openDevTools();
+    // Uncomment to open DevTools automatically in dev mode:
+    // mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -99,6 +103,72 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // Auto-updater (only in production)
+  if (!isDev) {
+    // Configure auto-updater
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    // Check for updates
+    autoUpdater.checkForUpdatesAndNotify();
+
+    // Auto-updater events
+    autoUpdater.on('update-available', (info: { version: string }) => {
+      systemLogger.info('Update available:', info.version);
+      mainWindow?.webContents.send('update-available', info);
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      systemLogger.info('Update downloaded:', info.version);
+      const releaseNotes = typeof info.releaseNotes === 'string' ? info.releaseNotes : null;
+      mainWindow?.webContents.send('update-downloaded', {
+        version: info.version,
+        releaseNotes,
+      });
+      // Custom UI will handle the restart prompt
+    });
+
+    // Handle restart request from renderer
+    ipcMain.on('update:restart', () => {
+      autoUpdater.quitAndInstall();
+    });
+
+    autoUpdater.on('error', (err: Error) => {
+      systemLogger.error('Auto-updater error:', err);
+    });
+  }
+
+  // Test update dialog (dev only)
+  if (isDev) {
+    // Method 1: Keyboard shortcut Cmd+Shift+U
+    const registered = globalShortcut.register('CommandOrControl+Shift+U', () => {
+      console.log('[DEV] Update dialog shortcut triggered');
+      showTestUpdateNotification();
+    });
+    console.log('[DEV] Shortcut Cmd+Shift+U registered:', registered);
+
+    // Method 2: IPC handler (call from DevTools console: window.electron.testUpdate())
+    ipcMain.handle('dev:test-update', () => {
+      console.log('[DEV] Update dialog triggered via IPC');
+      showTestUpdateNotification();
+    });
+
+    // Handle restart request from renderer (for testing)
+    ipcMain.on('update:restart', () => {
+      console.log('[DEV] Restart requested - would quit and install in production');
+    });
+  }
+
+  function showTestUpdateNotification() {
+    if (!mainWindow) return;
+    // Send fake update info to trigger the custom UI
+    mainWindow.webContents.send('update-downloaded', { 
+      version: '0.2.0',
+      releaseNotes: '<ul><li>Added welcome screen with wavy dot animation</li><li>Custom update notification UI</li><li>Auto-update support</li><li>Bug fixes and improvements</li></ul>'
+    });
+    console.log('[DEV] Sent update-downloaded event to renderer');
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -1077,6 +1147,9 @@ ${commentsText || 'No comments'}`;
   return new Promise((resolve) => {
     const args = ['--print', '--dangerously-skip-permissions'];
 
+    // Prevent system sleep while Claude is running
+    acquirePowerSaveBlocker();
+
     const claude = spawn('claude', args, {
       env: getEnvWithPath(),
       shell: true,
@@ -1097,10 +1170,12 @@ ${commentsText || 'No comments'}`;
     });
 
     claude.on('error', (err) => {
+      releasePowerSaveBlocker();
       resolve({ success: false, error: `Claude CLI error: ${err.message}` });
     });
 
     claude.on('close', (code) => {
+      releasePowerSaveBlocker();
       if (code !== 0) {
         resolve({ success: false, error: errorText || 'Claude CLI failed' });
         return;
@@ -1272,6 +1347,27 @@ async function detectChangesAndCreateEdits(
 // Resets when app restarts, so we don't pick up stale conversations from Cursor/terminal/etc
 const appSessionConversations: Set<string> = new Set();
 
+// Power save blocker - prevents system sleep while Claude processes are running
+let powerSaveBlockerId: number | null = null;
+let activeClaudeProcessCount = 0;
+
+function acquirePowerSaveBlocker() {
+  activeClaudeProcessCount++;
+  if (powerSaveBlockerId === null) {
+    powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    systemLogger.info('Power save blocker started', { id: powerSaveBlockerId });
+  }
+}
+
+function releasePowerSaveBlocker() {
+  activeClaudeProcessCount = Math.max(0, activeClaudeProcessCount - 1);
+  if (activeClaudeProcessCount === 0 && powerSaveBlockerId !== null) {
+    powerSaveBlocker.stop(powerSaveBlockerId);
+    systemLogger.info('Power save blocker stopped', { id: powerSaveBlockerId });
+    powerSaveBlockerId = null;
+  }
+}
+
 interface ClaudeSendOptions {
   planOnly?: boolean; // Restrict to read-only tools (for planning phase)
 }
@@ -1329,6 +1425,9 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
     }
 
     claudeLogger.command('claude', args);
+
+    // Prevent system sleep while Claude is running
+    acquirePowerSaveBlocker();
 
     const claude = spawn('claude', args, {
       env: getEnvWithPath(),
@@ -1441,6 +1540,17 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
                 }
                 mainWindow?.webContents.send('claude:activity', 'done');
               }
+              // Capture token usage from result event
+              if (event.usage || event.total_cost_usd !== undefined) {
+                const usage = {
+                  inputTokens: event.usage?.input_tokens || 0,
+                  outputTokens: event.usage?.output_tokens || 0,
+                  cacheReadTokens: event.usage?.cache_read_input_tokens || 0,
+                  cacheWriteTokens: event.usage?.cache_creation_input_tokens || 0,
+                  costUsd: event.total_cost_usd || 0,
+                };
+                mainWindow?.webContents.send('claude:usage', { projectPath, usage });
+              }
               break;
           }
         } catch {
@@ -1465,10 +1575,12 @@ ipcMain.handle('claude:send', async (_event, message: string, context: { activeF
 
     claude.on('error', (err) => {
       claudeLogger.error('Spawn error', err);
+      releasePowerSaveBlocker();
       resolve({ success: false, error: err.message });
     });
 
     claude.on('close', async (code) => {
+      releasePowerSaveBlocker();
       claudeLogger.end('Claude response', { code, responseLength: responseText.length });
 
       if (code === 0 || responseText.length > 0) {
@@ -3889,6 +4001,176 @@ ipcMain.handle('git:diffFiles', async (_, projectPath: string, baseBranch?: stri
   return { success: true, base, files };
 });
 
+// Generate and save unified diff for a worktree session
+ipcMain.handle('git:worktree:saveDiff', async (_, worktreePath: string, sessionId: string, baseBranch?: string) => {
+  // Determine base branch if not specified
+  let base = baseBranch;
+  if (!base) {
+    const candidates = ['main', 'master', 'develop', 'origin/main', 'origin/master', 'origin/develop'];
+    for (const candidate of candidates) {
+      const check = await runGit(worktreePath, ['rev-parse', '--verify', candidate]);
+      if (check.code === 0) {
+        base = candidate;
+        break;
+      }
+    }
+    if (!base) {
+      base = 'HEAD~1';
+    }
+  }
+
+  // Find the merge-base (common ancestor)
+  let compareRef = base;
+  const mergeBaseResult = await runGit(worktreePath, ['merge-base', base, 'HEAD']);
+  if (mergeBaseResult.code === 0 && mergeBaseResult.stdout.trim()) {
+    compareRef = mergeBaseResult.stdout.trim();
+  }
+
+  // Generate unified diff
+  const diffResult = await runGit(worktreePath, ['diff', compareRef]);
+  if (diffResult.code !== 0) {
+    return { success: false, error: diffResult.stderr };
+  }
+
+  // Also include uncommitted changes (staged and unstaged)
+  const uncommittedResult = await runGit(worktreePath, ['diff', 'HEAD']);
+
+  // Combine committed diff (from merge-base) with any uncommitted changes
+  let fullDiff = diffResult.stdout;
+  if (uncommittedResult.code === 0 && uncommittedResult.stdout.trim()) {
+    // If there are uncommitted changes, use that instead (it's more current)
+    fullDiff = uncommittedResult.stdout;
+  }
+
+  // Save to .xtc directory
+  const xtcDir = path.join(worktreePath, '.xtc');
+  const diffPath = path.join(xtcDir, `worktree-${sessionId}.patch`);
+
+  try {
+    await fs.mkdir(xtcDir, { recursive: true });
+    await fs.writeFile(diffPath, fullDiff, 'utf-8');
+    gitLogger.success(`Saved worktree diff: ${diffPath}`);
+    return { success: true, path: diffPath, base, diffLength: fullDiff.length };
+  } catch (error) {
+    gitLogger.error('Failed to save worktree diff', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// Read worktree diff file
+ipcMain.handle('git:worktree:readDiff', async (_, worktreePath: string, sessionId: string) => {
+  const diffPath = path.join(worktreePath, '.xtc', `worktree-${sessionId}.patch`);
+
+  try {
+    const content = await fs.readFile(diffPath, 'utf-8');
+    return { success: true, diff: content, path: diffPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Delete worktree diff file (cleanup)
+ipcMain.handle('git:worktree:deleteDiff', async (_, worktreePath: string, sessionId: string) => {
+  const diffPath = path.join(worktreePath, '.xtc', `worktree-${sessionId}.patch`);
+
+  try {
+    await fs.unlink(diffPath);
+    return { success: true };
+  } catch {
+    // File may not exist, that's ok
+    return { success: true };
+  }
+});
+
+// Token usage tracking per worktree/session
+interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  lastUpdated: number;
+  isClosed: boolean; // When true, stop accumulating
+}
+
+// Save/update token usage for a worktree session
+ipcMain.handle('git:worktree:updateTokenUsage', async (_, worktreePath: string, sessionId: string, usage: Omit<TokenUsage, 'lastUpdated' | 'isClosed'>) => {
+  const xtcDir = path.join(worktreePath, '.xtc');
+  const usagePath = path.join(xtcDir, `token-usage-${sessionId}.json`);
+
+  try {
+    await fs.mkdir(xtcDir, { recursive: true });
+
+    // Read existing usage
+    let existingUsage: TokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+      lastUpdated: Date.now(),
+      isClosed: false,
+    };
+
+    try {
+      const content = await fs.readFile(usagePath, 'utf-8');
+      existingUsage = JSON.parse(content);
+    } catch {
+      // File doesn't exist, use defaults
+    }
+
+    // If session is closed, don't add more usage
+    if (existingUsage.isClosed) {
+      return { success: true, usage: existingUsage, skipped: true };
+    }
+
+    // Accumulate usage
+    const updatedUsage: TokenUsage = {
+      inputTokens: existingUsage.inputTokens + usage.inputTokens,
+      outputTokens: existingUsage.outputTokens + usage.outputTokens,
+      cacheReadTokens: existingUsage.cacheReadTokens + usage.cacheReadTokens,
+      cacheWriteTokens: existingUsage.cacheWriteTokens + usage.cacheWriteTokens,
+      costUsd: existingUsage.costUsd + usage.costUsd,
+      lastUpdated: Date.now(),
+      isClosed: false,
+    };
+
+    await fs.writeFile(usagePath, JSON.stringify(updatedUsage, null, 2), 'utf-8');
+    return { success: true, usage: updatedUsage };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Read token usage for a worktree session
+ipcMain.handle('git:worktree:readTokenUsage', async (_, worktreePath: string, sessionId: string) => {
+  const usagePath = path.join(worktreePath, '.xtc', `token-usage-${sessionId}.json`);
+
+  try {
+    const content = await fs.readFile(usagePath, 'utf-8');
+    return { success: true, usage: JSON.parse(content) };
+  } catch {
+    return { success: true, usage: null };
+  }
+});
+
+// Mark token usage session as closed (PR merged/closed)
+ipcMain.handle('git:worktree:closeTokenUsage', async (_, worktreePath: string, sessionId: string) => {
+  const usagePath = path.join(worktreePath, '.xtc', `token-usage-${sessionId}.json`);
+
+  try {
+    const content = await fs.readFile(usagePath, 'utf-8');
+    const usage = JSON.parse(content);
+    usage.isClosed = true;
+    usage.lastUpdated = Date.now();
+    await fs.writeFile(usagePath, JSON.stringify(usage, null, 2), 'utf-8');
+    return { success: true, usage };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+
 // Review file with Claude - dedicated fresh conversation for code review
 ipcMain.handle('claude:review', async (_event, projectPath: string, _fileContent: string, filePath: string, diff: string, context: { skills: string; rules: string }) => {
   return new Promise((resolve) => {
@@ -3979,6 +4261,9 @@ IMPORTANT: Use the line numbers shown on the LEFT side of the diff above. These 
     // Spawn fresh Claude session (no --continue) for isolated review
     const args = ['--print', '--dangerously-skip-permissions', '--output-format', 'json'];
 
+    // Prevent system sleep while Claude is running
+    acquirePowerSaveBlocker();
+
     const claude = spawn('claude', args, {
       env: getEnvWithPath(),
       shell: true,
@@ -3996,6 +4281,7 @@ IMPORTANT: Use the line numbers shown on the LEFT side of the diff above. These 
     });
 
     claude.on('close', (code) => {
+      releasePowerSaveBlocker();
       if (code === 0 && responseText) {
         try {
           // Parse the JSON response
@@ -4029,6 +4315,7 @@ IMPORTANT: Use the line numbers shown on the LEFT side of the diff above. These 
     });
 
     claude.on('error', (err) => {
+      releasePowerSaveBlocker();
       resolve({ success: false, error: err.message });
     });
 

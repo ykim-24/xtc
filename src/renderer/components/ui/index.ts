@@ -5,3 +5,5 @@ export * from './Panel';
 export * from './IconButton';
 export * from './ContextMenu';
 export * from './Modal';
+export * from './ConfirmModal';
+export * from './UpdateNotification';

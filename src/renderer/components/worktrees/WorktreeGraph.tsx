@@ -34,9 +34,9 @@ interface GraphEdge {
 type LayoutDirection = 'vertical' | 'horizontal';
 
 const NODE_WIDTH = 128;
-const NODE_HEIGHT = 80;
-const NODE_GAP_X = 60;
-const NODE_GAP_Y = 80;
+const NODE_HEIGHT = 128;
+const NODE_GAP_X = 100;
+const NODE_GAP_Y = 120;
 
 export function WorktreeGraph() {
   const { projectPath } = useProjectStore();
@@ -369,15 +369,16 @@ export function WorktreeGraph() {
                     const x2 = edge.toX + offsetX;
                     const y2 = edge.toY + offsetY;
 
-                    // Create a curved path
+                    // Create a 90-degree angled path (L-shaped)
                     const midY = (y1 + y2) / 2;
+                    const midX = (x1 + x2) / 2;
 
                     return (
                       <path
                         key={i}
                         d={layout === 'vertical'
-                          ? `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`
-                          : `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+                          ? `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`
+                          : `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`
                         }
                         fill="none"
                         stroke="var(--color-border-secondary, #4b5563)"

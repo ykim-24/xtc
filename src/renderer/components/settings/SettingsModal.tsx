@@ -49,20 +49,34 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const shift = isMac ? '⇧' : 'Shift';
 
   const shortcuts = [
-    { action: 'New File', keys: `${mod} + N` },
-    { action: 'Open Folder', keys: `${mod} + O` },
-    { action: 'Save', keys: `${mod} + S` },
-    { action: 'Save All', keys: `${mod} + ${shift} + S` },
-    { action: 'Close Tab', keys: `${mod} + W` },
-    { action: 'Reopen Closed Tab', keys: `${mod} + ${shift} + T` },
-    { action: 'Close Window', keys: `${mod} + ${shift} + W` },
-    { action: 'Toggle Sidebar', keys: `${mod} + B` },
-    { action: 'Toggle Terminal', keys: `${mod} + J` },
-    { action: 'Toggle Chat', keys: `${mod} + ${shift} + C` },
-    { action: 'Next Tab', keys: `${mod} + Alt + →` },
-    { action: 'Previous Tab', keys: `${mod} + Alt + ←` },
-    { action: 'Cycle Tabs', keys: `Ctrl + Tab` },
-    { action: 'Settings', keys: `${mod} + ,` },
+    // File Management
+    { action: 'New File', keys: `${mod} + N`, category: 'Files' },
+    { action: 'Open Folder', keys: `${mod} + O`, category: 'Files' },
+    { action: 'Save', keys: `${mod} + S`, category: 'Files' },
+    { action: 'Save All', keys: `${mod} + ${shift} + S`, category: 'Files' },
+    { action: 'Go to File', keys: `${mod} + P`, category: 'Files' },
+
+    // Tabs
+    { action: 'Close Tab', keys: `${mod} + W`, category: 'Tabs' },
+    { action: 'Reopen Closed Tab', keys: `${mod} + ${shift} + T`, category: 'Tabs' },
+    { action: 'Next Tab', keys: `${mod} + Alt + →`, category: 'Tabs' },
+    { action: 'Previous Tab', keys: `${mod} + Alt + ←`, category: 'Tabs' },
+    { action: 'Cycle Tabs', keys: `Ctrl + Tab`, category: 'Tabs' },
+
+    // Panels
+    { action: 'Toggle Sidebar', keys: `${mod} + B`, category: 'Panels' },
+    { action: 'Toggle Terminal', keys: `${mod} + J`, category: 'Panels' },
+    { action: 'Toggle Chat', keys: `${mod} + ${shift} + C`, category: 'Panels' },
+    { action: 'Toggle Debug Panel', keys: `${mod} + 0`, category: 'Panels' },
+
+    // Window
+    { action: 'Close Window', keys: `${mod} + ${shift} + W`, category: 'Window' },
+    { action: 'Settings', keys: `${mod} + ,`, category: 'Window' },
+    { action: 'Focus XTC Window', keys: `${mod} + ${shift} + U`, category: 'Window' },
+
+    // Chat
+    { action: 'Send Message', keys: `Enter`, category: 'Chat' },
+    { action: 'New Line in Chat', keys: `${shift} + Enter`, category: 'Chat' },
   ];
 
   const fontFamilies = [
@@ -80,7 +94,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
 
@@ -375,29 +389,44 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
                 <SettingItem
                   label="Auto-Detect Context"
-                  description="Automatically add related files to context when chatting"
+                  description="Automatically add related files to context when chatting (coming soon)"
+                  disabled
                 >
                   <ToggleSwitch
                     checked={autoDetectContext}
                     onChange={setAutoDetectContext}
+                    disabled
                   />
                 </SettingItem>
               </>
             )}
 
             {activeTab === 'shortcuts' && (
-              <div className="space-y-1">
-                {shortcuts.map((shortcut) => (
-                  <div
-                    key={shortcut.action}
-                    className="flex items-center justify-between py-2 px-3 rounded hover:bg-bg-secondary"
-                  >
-                    <span className="text-sm text-text-primary">{shortcut.action}</span>
-                    <kbd className="px-2 py-1 bg-bg-tertiary border border-border-primary rounded text-xs text-text-secondary font-mono">
-                      {shortcut.keys}
-                    </kbd>
-                  </div>
-                ))}
+              <div className="space-y-6">
+                {['Files', 'Tabs', 'Panels', 'Window', 'Chat'].map((category) => {
+                  const categoryShortcuts = shortcuts.filter(s => s.category === category);
+                  if (categoryShortcuts.length === 0) return null;
+                  return (
+                    <div key={category}>
+                      <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2 px-3">
+                        {category}
+                      </h3>
+                      <div className="space-y-1">
+                        {categoryShortcuts.map((shortcut) => (
+                          <div
+                            key={shortcut.action}
+                            className="flex items-center justify-between py-2 px-3 rounded hover:bg-bg-secondary"
+                          >
+                            <span className="text-sm text-text-primary">{shortcut.action}</span>
+                            <kbd className="px-2 py-1 bg-bg-tertiary border border-border-primary rounded text-xs text-text-secondary font-mono">
+                              {shortcut.keys}
+                            </kbd>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -429,11 +458,12 @@ interface SettingItemProps {
   label: string;
   description: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }
 
-function SettingItem({ label, description, children }: SettingItemProps) {
+function SettingItem({ label, description, children, disabled }: SettingItemProps) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className={`flex items-center justify-between gap-4 ${disabled ? 'opacity-50' : ''}`}>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text-primary">{label}</div>
         <div className="text-xs text-text-muted">{description}</div>
@@ -448,15 +478,17 @@ function SettingItem({ label, description, children }: SettingItemProps) {
 interface ToggleSwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }
 
-function ToggleSwitch({ checked, onChange }: ToggleSwitchProps) {
+function ToggleSwitch({ checked, onChange, disabled }: ToggleSwitchProps) {
   return (
     <button
-      onClick={() => onChange(!checked)}
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
       className={`relative w-10 h-5 rounded-full transition-colors ${
         checked ? 'bg-accent-primary' : 'bg-bg-tertiary'
-      }`}
+      } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
     >
       <div
         className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform ${

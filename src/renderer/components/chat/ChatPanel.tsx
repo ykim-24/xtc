@@ -3,7 +3,7 @@ import { AlertCircle } from 'lucide-react';
 import { Panel } from '@/components/ui';
 import { ChatInput } from './ChatInput';
 import { PixelCube } from './PixelCube';
-import { useChatStore, useProjectStore, useContextStore, useEditsStore, useSettingsStore, useTestStore } from '@/stores';
+import { useChatStore, useProjectStore, useContextStore, useEditsStore, useSettingsStore, useTestStore, useWorktreeStore } from '@/stores';
 import { parseEditsFromResponse, createPendingEditsFromParsed } from '@/utils/editParser';
 
 export function ChatPanel() {
@@ -66,6 +66,28 @@ export function ChatPanel() {
 
     return unsubscribe;
   }, [setCurrentActivity]);
+
+  // Set up token usage listener for worktree sessions
+  useEffect(() => {
+    if (!window.electron?.claude) return;
+
+    const unsubscribe = window.electron.claude.onUsage(async (data) => {
+      const { projectPath: usageProjectPath, usage } = data;
+
+      // Check if this project path corresponds to a worktree session
+      const session = useWorktreeStore.getState().getSession(usageProjectPath);
+      if (session?.linearTicket?.identifier) {
+        // Update token usage for this worktree session
+        await window.electron?.git.worktree.updateTokenUsage(
+          usageProjectPath,
+          session.linearTicket.identifier,
+          usage
+        );
+      }
+    });
+
+    return unsubscribe;
+  }, []);
 
   const handleSend = async (content: string, fileMappings: Map<string, string>) => {
     // Set loading immediately

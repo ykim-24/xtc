@@ -23,6 +23,12 @@ export interface PlanStep {
   status: 'pending' | 'approved' | 'rejected';
 }
 
+export interface PlanQuestion {
+  id: string;
+  question: string;
+  answer: string;
+}
+
 export interface StartWorkSession {
   id: string;
   issueId: string;
@@ -35,6 +41,7 @@ export interface StartWorkSession {
   isMinimized: boolean;
   needsInput: boolean;
   isProcessing: boolean;
+  hasUnansweredQuestions: boolean;  // True when questions modal was shown but not answered
 
   // Data
   selectedRepo: string | null;
@@ -42,6 +49,7 @@ export interface StartWorkSession {
   branchName: string;
   logs: LogEntry[];
   planSteps: PlanStep[];
+  questions: PlanQuestion[];  // Questions from Claude during planning
   streamingOutput: string;  // Current streaming output from Claude
   additionalContext: string;
 
@@ -53,6 +61,12 @@ export interface StartWorkSession {
 interface StartWorkState {
   sessions: Record<string, StartWorkSession>;
 
+  // Questions modal state - shown at root level
+  questionsModalSessionId: string | null;
+
+  // Session panel state - which session panel is open at root level
+  activeSessionPanelId: string | null;
+
   // Session lifecycle
   createSession: (issueId: string, issueIdentifier: string, issueTitle: string, issueDescription?: string, branchName?: string) => string;
   removeSession: (sessionId: string) => void;
@@ -60,6 +74,15 @@ interface StartWorkState {
   // Modal state
   minimizeSession: (sessionId: string) => void;
   restoreSession: (sessionId: string) => void;
+
+  // Session panel actions
+  openSessionPanel: (sessionId: string) => void;
+  closeSessionPanel: () => void;
+
+  // Questions modal actions
+  openQuestionsModal: (sessionId: string) => void;
+  closeQuestionsModal: () => void;
+  setHasUnansweredQuestions: (sessionId: string, hasUnansweredQuestions: boolean) => void;
 
   // Workflow actions
   setStep: (sessionId: string, step: StartWorkStep) => void;
@@ -74,6 +97,8 @@ interface StartWorkState {
 
   // Plan management
   setPlanSteps: (sessionId: string, steps: PlanStep[]) => void;
+  setQuestions: (sessionId: string, questions: PlanQuestion[]) => void;
+  updateQuestionAnswer: (sessionId: string, questionId: string, answer: string) => void;
   setAdditionalContext: (sessionId: string, context: string) => void;
 
   // Streaming output
@@ -91,6 +116,57 @@ interface StartWorkState {
 
 export const useStartWorkStore = create<StartWorkState>((set, get) => ({
   sessions: {},
+  questionsModalSessionId: null,
+  activeSessionPanelId: null,
+
+  openSessionPanel: (sessionId) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return { activeSessionPanelId: sessionId };
+      return {
+        activeSessionPanelId: sessionId,
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, isMinimized: false },
+        },
+      };
+    });
+  },
+
+  closeSessionPanel: () => {
+    set({ activeSessionPanelId: null });
+  },
+
+  openQuestionsModal: (sessionId) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return { questionsModalSessionId: sessionId };
+      return {
+        questionsModalSessionId: sessionId,
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, hasUnansweredQuestions: true },
+        },
+      };
+    });
+  },
+
+  closeQuestionsModal: () => {
+    set({ questionsModalSessionId: null });
+  },
+
+  setHasUnansweredQuestions: (sessionId, hasUnansweredQuestions) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return state;
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, hasUnansweredQuestions },
+        },
+      };
+    });
+  },
 
   createSession: (issueId, issueIdentifier, issueTitle, issueDescription, branchName) => {
     const id = `startwork-${issueId}-${Date.now()}`;
@@ -109,6 +185,7 @@ export const useStartWorkStore = create<StartWorkState>((set, get) => ({
           isMinimized: false,
           needsInput: true,
           isProcessing: false,
+          hasUnansweredQuestions: false,
           selectedRepo: null,
           worktreePath: null,
           branchName: defaultBranchName,
@@ -119,6 +196,7 @@ export const useStartWorkStore = create<StartWorkState>((set, get) => ({
             { type: 'prompt', message: 'Select the repository for this ticket:' },
           ],
           planSteps: [],
+          questions: [],
           streamingOutput: '',
           additionalContext: '',
           startedAt: Date.now(),
@@ -260,6 +338,37 @@ export const useStartWorkStore = create<StartWorkState>((set, get) => ({
         sessions: {
           ...state.sessions,
           [sessionId]: { ...session, planSteps: steps },
+        },
+      };
+    });
+  },
+
+  setQuestions: (sessionId, questions) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return state;
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, questions },
+        },
+      };
+    });
+  },
+
+  updateQuestionAnswer: (sessionId, questionId, answer) => {
+    set((state) => {
+      const session = state.sessions[sessionId];
+      if (!session) return state;
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...session,
+            questions: session.questions.map(q =>
+              q.id === questionId ? { ...q, answer } : q
+            ),
+          },
         },
       };
     });
