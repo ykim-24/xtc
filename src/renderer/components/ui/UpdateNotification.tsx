@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 
 interface UpdateInfo {
   version: string;
@@ -61,7 +61,7 @@ export function UpdateNotification() {
               linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
               linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)
             `,
-            backgroundSize: '32px 32px',
+            backgroundSize: "32px 32px",
           }}
         />
 
@@ -83,33 +83,47 @@ export function UpdateNotification() {
           {/* Title */}
           <h2
             className="text-xl font-light text-center text-text-primary mb-2"
-            style={{ fontFamily: 'SF Pro Display, Inter, system-ui, sans-serif' }}
+            style={{
+              fontFamily: "SF Pro Display, Inter, system-ui, sans-serif",
+            }}
           >
             Update Ready
           </h2>
 
           {/* Version info */}
           <p className="text-center text-text-secondary text-sm mb-4">
-            Version <span className="text-accent-primary font-mono">{updateInfo.version}</span> has been downloaded
+            Version{" "}
+            <span className="text-accent-primary font-mono">
+              {updateInfo.version}
+            </span>{" "}
+            has been downloaded
           </p>
 
           {/* Changelog */}
           {updateInfo.releaseNotes && (
             <div className="mb-6 max-h-32 overflow-y-auto">
-              <p className="text-xs text-text-muted mb-2 text-center">What's new:</p>
-              <div 
+              <p className="text-xs text-text-muted mb-2 text-center">
+                What's new:
+              </p>
+              <div
                 className="text-sm text-text-secondary bg-black/20 rounded-lg p-3 text-left"
-                style={{ fontFamily: 'SF Pro Text, Inter, system-ui, sans-serif' }}
+                style={{
+                  fontFamily: "SF Pro Text, Inter, system-ui, sans-serif",
+                }}
               >
-                {typeof updateInfo.releaseNotes === 'string' ? (
-                  <div 
+                {typeof updateInfo.releaseNotes === "string" ? (
+                  <div
                     className="prose prose-sm prose-invert max-w-none [&>ul]:list-disc [&>ul]:pl-4 [&>ul]:space-y-1 [&>p]:mb-2"
-                    dangerouslySetInnerHTML={{ __html: updateInfo.releaseNotes }}
+                    dangerouslySetInnerHTML={{
+                      __html: updateInfo.releaseNotes,
+                    }}
                   />
                 ) : (
                   <ul className="list-disc pl-4 space-y-1">
                     {updateInfo.releaseNotes.map((note, i) => (
-                      <li key={i}>{typeof note === 'string' ? note : note.note}</li>
+                      <li key={i}>
+                        {typeof note === "string" ? note : note.note}
+                      </li>
                     ))}
                   </ul>
                 )}
@@ -120,7 +134,9 @@ export function UpdateNotification() {
           {/* Buttons */}
           <div
             className="flex items-center justify-center gap-6 text-lg font-light"
-            style={{ fontFamily: 'SF Pro Display, Inter, system-ui, sans-serif' }}
+            style={{
+              fontFamily: "SF Pro Display, Inter, system-ui, sans-serif",
+            }}
           >
             <button
               onClick={handleLater}
@@ -187,4 +203,3 @@ export function UpdateNotification() {
     </div>
   );
 }
-

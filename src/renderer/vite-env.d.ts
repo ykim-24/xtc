@@ -2,7 +2,7 @@
 
 interface FileItem {
   name: string;
-  type: 'file' | 'directory';
+  type: "file" | "directory";
   path: string;
 }
 
@@ -85,17 +85,28 @@ interface TokenUsage {
 }
 
 interface ClaudeAPI {
-  send: (message: string, context: ChatContext, projectPath: string | null, options?: ClaudeSendOptions) => Promise<ClaudeSendResult>;
+  send: (
+    message: string,
+    context: ChatContext,
+    projectPath: string | null,
+    options?: ClaudeSendOptions
+  ) => Promise<ClaudeSendResult>;
   checkInstalled: () => Promise<boolean>;
   clearConversation: (projectPath: string | null) => Promise<StoreSetResult>;
   onStream: (callback: (chunk: string) => void) => () => void;
   getPendingEdits: () => Promise<PendingEdit[]>;
-  approveEdit: (editId: string, filePath?: string, content?: string) => Promise<StoreSetResult>;
+  approveEdit: (
+    editId: string,
+    filePath?: string,
+    content?: string
+  ) => Promise<StoreSetResult>;
   rejectEdit: (editId: string) => Promise<StoreSetResult>;
   onPendingEditAdded: (callback: (edit: PendingEdit) => void) => () => void;
   onPendingEditUpdated: (callback: (edit: PendingEdit) => void) => () => void;
   onActivity: (callback: (activity: string) => void) => () => void;
-  onUsage: (callback: (data: { projectPath: string; usage: TokenUsage }) => void) => () => void;
+  onUsage: (
+    callback: (data: { projectPath: string; usage: TokenUsage }) => void
+  ) => () => void;
 }
 
 interface TerminalCreateResult {
@@ -106,11 +117,22 @@ interface TerminalCreateResult {
 
 interface TerminalAPI {
   create: (cwd?: string) => Promise<TerminalCreateResult>;
-  write: (id: string, data: string) => Promise<{ success: boolean; error?: string }>;
-  resize: (id: string, cols: number, rows: number) => Promise<{ success: boolean; error?: string }>;
+  write: (
+    id: string,
+    data: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  resize: (
+    id: string,
+    cols: number,
+    rows: number
+  ) => Promise<{ success: boolean; error?: string }>;
   kill: (id: string) => Promise<{ success: boolean; error?: string }>;
-  onData: (callback: (event: { id: string; data: string }) => void) => () => void;
-  onExit: (callback: (event: { id: string; exitCode: number }) => void) => () => void;
+  onData: (
+    callback: (event: { id: string; data: string }) => void
+  ) => () => void;
+  onExit: (
+    callback: (event: { id: string; exitCode: number }) => void
+  ) => () => void;
 }
 
 interface LSPResult<T = unknown> {
@@ -133,7 +155,7 @@ interface TestResult {
   id: string;
   name: string;
   fullName: string;
-  status: 'passed' | 'failed' | 'skipped' | 'pending';
+  status: "passed" | "failed" | "skipped" | "pending";
   duration?: number;
   filePath: string;
   line?: number;
@@ -146,7 +168,7 @@ interface TestFileResult {
   path: string;
   name: string;
   tests: TestResult[];
-  status: 'passed' | 'failed' | 'skipped' | 'pending';
+  status: "passed" | "failed" | "skipped" | "pending";
   expanded: boolean;
 }
 
@@ -158,7 +180,7 @@ interface RunTestsResult {
 }
 
 interface DetectedFramework {
-  id: 'jest' | 'vitest' | 'mocha' | 'playwright' | 'cypress';
+  id: "jest" | "vitest" | "mocha" | "playwright" | "cypress";
   name: string;
   detected: boolean;
   configFile?: string;
@@ -175,13 +197,41 @@ interface LSPAPI {
   startServer: (serverName: string) => Promise<{ success: boolean }>;
   stopServer: (serverName: string) => Promise<{ success: boolean }>;
   stopAll: () => Promise<{ success: boolean }>;
-  didOpen: (uri: string, language: string, content: string) => Promise<{ success: boolean }>;
-  didChange: (uri: string, language: string, content: string) => Promise<{ success: boolean }>;
+  didOpen: (
+    uri: string,
+    language: string,
+    content: string
+  ) => Promise<{ success: boolean }>;
+  didChange: (
+    uri: string,
+    language: string,
+    content: string
+  ) => Promise<{ success: boolean }>;
   didClose: (uri: string, language: string) => Promise<{ success: boolean }>;
-  getCompletions: (uri: string, language: string, line: number, character: number) => Promise<LSPResult>;
-  getHover: (uri: string, language: string, line: number, character: number) => Promise<LSPResult>;
-  getDefinition: (uri: string, language: string, line: number, character: number) => Promise<LSPResult>;
-  getReferences: (uri: string, language: string, line: number, character: number) => Promise<LSPResult>;
+  getCompletions: (
+    uri: string,
+    language: string,
+    line: number,
+    character: number
+  ) => Promise<LSPResult>;
+  getHover: (
+    uri: string,
+    language: string,
+    line: number,
+    character: number
+  ) => Promise<LSPResult>;
+  getDefinition: (
+    uri: string,
+    language: string,
+    line: number,
+    character: number
+  ) => Promise<LSPResult>;
+  getReferences: (
+    uri: string,
+    language: string,
+    line: number,
+    character: number
+  ) => Promise<LSPResult>;
   formatDocument: (uri: string, language: string) => Promise<LSPResult>;
   isServerAvailable: (language: string) => Promise<LSPServerAvailableResult>;
   getAvailableServers: () => Promise<LSPServersResult>;
@@ -197,7 +247,7 @@ interface LoadTypesResult {
 // Git types
 interface GitChange {
   path: string;
-  status: 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed';
+  status: "modified" | "added" | "deleted" | "untracked" | "renamed";
   staged: boolean;
 }
 
@@ -277,7 +327,7 @@ interface GitPRReviewComment {
 }
 
 interface GitPRReviewOptions {
-  action: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+  action: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   body: string;
   comments: GitPRReviewComment[];
 }
@@ -302,7 +352,7 @@ interface GitDiffResult {
 interface GitDiffFile {
   path: string;
   diff: string;
-  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  status: "added" | "modified" | "deleted" | "renamed";
 }
 
 interface GitDiffFilesResult {
@@ -339,7 +389,7 @@ interface GitPRCommentsResult {
 }
 
 interface ReviewIssue {
-  severity: 'error' | 'warning' | 'suggestion';
+  severity: "error" | "warning" | "suggestion";
   startLine: number | null;
   endLine: number | null;
   line?: number | null; // legacy support
@@ -357,7 +407,7 @@ interface ReviewHighlight {
 interface ReviewResult {
   success: boolean;
   review?: {
-    verdict?: 'approve' | 'concern' | 'block';
+    verdict?: "approve" | "concern" | "block";
     issues: ReviewIssue[];
     highlights: ReviewHighlight[];
     summary: string;
@@ -530,12 +580,35 @@ interface LinearUpdateIssueResult {
 interface LinearAPI {
   test: (apiKey: string) => Promise<LinearTestResult>;
   getMyIssues: (apiKey: string) => Promise<LinearIssuesResult>;
-  getIssue: (apiKey: string, issueId: string) => Promise<LinearIssueDetailResult>;
-  createComment: (apiKey: string, issueId: string, body: string) => Promise<LinearCreateCommentResult>;
-  deleteComment: (apiKey: string, commentId: string) => Promise<{ success: boolean; error?: string }>;
-  getIssueStates: (apiKey: string, issueId: string) => Promise<{ success: boolean; states?: Array<{ id: string; name: string; color: string; type: string }>; error?: string }>;
-  updateIssue: (apiKey: string, issueId: string, updates: { stateId?: string; stateName?: string }) => Promise<LinearUpdateIssueResult>;
-  generateSummary: (issueData: LinearSummaryInput) => Promise<LinearSummaryResult>;
+  getIssue: (
+    apiKey: string,
+    issueId: string
+  ) => Promise<LinearIssueDetailResult>;
+  createComment: (
+    apiKey: string,
+    issueId: string,
+    body: string
+  ) => Promise<LinearCreateCommentResult>;
+  deleteComment: (
+    apiKey: string,
+    commentId: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  getIssueStates: (
+    apiKey: string,
+    issueId: string
+  ) => Promise<{
+    success: boolean;
+    states?: Array<{ id: string; name: string; color: string; type: string }>;
+    error?: string;
+  }>;
+  updateIssue: (
+    apiKey: string,
+    issueId: string,
+    updates: { stateId?: string; stateName?: string }
+  ) => Promise<LinearUpdateIssueResult>;
+  generateSummary: (
+    issueData: LinearSummaryInput
+  ) => Promise<LinearSummaryResult>;
 }
 
 interface GitAPI {
@@ -544,37 +617,115 @@ interface GitAPI {
   remote: (projectPath: string) => Promise<GitRemoteResult>;
   status: (projectPath: string) => Promise<GitStatusResult>;
   stage: (projectPath: string, files: string[]) => Promise<GitOperationResult>;
-  unstage: (projectPath: string, files: string[]) => Promise<GitOperationResult>;
+  unstage: (
+    projectPath: string,
+    files: string[]
+  ) => Promise<GitOperationResult>;
   commit: (projectPath: string, message: string) => Promise<GitOperationResult>;
   push: (projectPath: string, branch?: string) => Promise<GitOperationResult>;
   pull: (projectPath: string) => Promise<GitOperationResult>;
   fetch: (projectPath: string) => Promise<GitOperationResult>;
-  createBranch: (projectPath: string, branchName: string, checkout?: boolean) => Promise<GitOperationResult>;
-  checkout: (projectPath: string, branchName: string) => Promise<GitOperationResult>;
+  createBranch: (
+    projectPath: string,
+    branchName: string,
+    checkout?: boolean
+  ) => Promise<GitOperationResult>;
+  checkout: (
+    projectPath: string,
+    branchName: string
+  ) => Promise<GitOperationResult>;
   restore: (projectPath: string) => Promise<GitOperationResult>;
   worktree: {
     list: (projectPath: string) => Promise<GitWorktreeListResult>;
-    add: (projectPath: string, worktreePath: string, branch: string, createBranch?: boolean) => Promise<GitOperationResult>;
-    remove: (projectPath: string, worktreePath: string) => Promise<GitOperationResult>;
-    saveDiff: (worktreePath: string, sessionId: string, baseBranch?: string) => Promise<{ success: boolean; path?: string; base?: string; diffLength?: number; error?: string }>;
-    readDiff: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; diff?: string; path?: string; error?: string }>;
-    deleteDiff: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; error?: string }>;
-    updateTokenUsage: (worktreePath: string, sessionId: string, usage: TokenUsage) => Promise<{ success: boolean; total?: TokenUsage & { isClosed?: boolean }; error?: string }>;
-    readTokenUsage: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; usage?: TokenUsage & { isClosed?: boolean }; error?: string }>;
-    closeTokenUsage: (worktreePath: string, sessionId: string) => Promise<{ success: boolean; error?: string }>;
+    add: (
+      projectPath: string,
+      worktreePath: string,
+      branch: string,
+      createBranch?: boolean
+    ) => Promise<GitOperationResult>;
+    remove: (
+      projectPath: string,
+      worktreePath: string
+    ) => Promise<GitOperationResult>;
+    saveDiff: (
+      worktreePath: string,
+      sessionId: string,
+      baseBranch?: string
+    ) => Promise<{
+      success: boolean;
+      path?: string;
+      base?: string;
+      diffLength?: number;
+      error?: string;
+    }>;
+    readDiff: (
+      worktreePath: string,
+      sessionId: string
+    ) => Promise<{
+      success: boolean;
+      diff?: string;
+      path?: string;
+      error?: string;
+    }>;
+    deleteDiff: (
+      worktreePath: string,
+      sessionId: string
+    ) => Promise<{ success: boolean; error?: string }>;
+    updateTokenUsage: (
+      worktreePath: string,
+      sessionId: string,
+      usage: TokenUsage
+    ) => Promise<{
+      success: boolean;
+      total?: TokenUsage & { isClosed?: boolean };
+      error?: string;
+    }>;
+    readTokenUsage: (
+      worktreePath: string,
+      sessionId: string
+    ) => Promise<{
+      success: boolean;
+      usage?: TokenUsage & { isClosed?: boolean };
+      error?: string;
+    }>;
+    closeTokenUsage: (
+      worktreePath: string,
+      sessionId: string
+    ) => Promise<{ success: boolean; error?: string }>;
   };
   pr: {
-    create: (projectPath: string, options: { title: string; body: string; base: string }) => Promise<GitPRCreateResult>;
+    create: (
+      projectPath: string,
+      options: { title: string; body: string; base: string }
+    ) => Promise<GitPRCreateResult>;
     list: (projectPath: string) => Promise<GitPRListResult>;
-    template: (projectPath: string) => Promise<{ success: boolean; template: string | null; path?: string }>;
+    template: (
+      projectPath: string
+    ) => Promise<{ success: boolean; template: string | null; path?: string }>;
     comments: (projectPath: string) => Promise<GitPRCommentsResult>;
-    review: (projectPath: string, options: GitPRReviewOptions) => Promise<GitPRReviewResult>;
-    onReviewProgress: (callback: (progress: { batch: number; total: number; status: 'pending' | 'sending' | 'success' | 'failed' | 'rolling-back' }) => void) => () => void;
+    review: (
+      projectPath: string,
+      options: GitPRReviewOptions
+    ) => Promise<GitPRReviewResult>;
+    onReviewProgress: (
+      callback: (progress: {
+        batch: number;
+        total: number;
+        status: "pending" | "sending" | "success" | "failed" | "rolling-back";
+      }) => void
+    ) => () => void;
   };
-  defaultBranch: (projectPath: string) => Promise<{ success: boolean; branch: string }>;
-  protectedBranches: (projectPath: string) => Promise<GitProtectedBranchesResult>;
+  defaultBranch: (
+    projectPath: string
+  ) => Promise<{ success: boolean; branch: string }>;
+  protectedBranches: (
+    projectPath: string
+  ) => Promise<GitProtectedBranchesResult>;
   diff: (projectPath: string, staged?: boolean) => Promise<GitDiffResult>;
-  diffFiles: (projectPath: string, baseBranch?: string) => Promise<GitDiffFilesResult>;
+  diffFiles: (
+    projectPath: string,
+    baseBranch?: string
+  ) => Promise<GitDiffFilesResult>;
   prDiffFiles: (projectPath: string) => Promise<GitDiffFilesResult>;
 }
 
@@ -587,7 +738,9 @@ interface ElectronAPI {
   onSystemWake: (callback: () => void) => () => void;
   openFolder: () => Promise<string | null>;
   readFile: (path: string) => Promise<ReadFileResult>;
-  readImageFile: (path: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+  readImageFile: (
+    path: string
+  ) => Promise<{ success: boolean; data?: string; error?: string }>;
   writeFile: (path: string, content: string) => Promise<WriteFileResult>;
   readDir: (path: string) => Promise<ReadDirResult>;
   deleteFile: (path: string) => Promise<WriteFileResult>;
@@ -602,13 +755,33 @@ interface ElectronAPI {
   lsp: LSPAPI;
   linear: LinearAPI;
   git: GitAPI;
-  detectTests: (projectPath: string, framework?: string) => Promise<RunTestsResult>;
-  runTests: (projectPath: string, testFile?: string, testName?: string, framework?: string) => Promise<RunTestsResult>;
-  detectTestFrameworks: (projectPath: string) => Promise<DetectFrameworksResult>;
-  review: (projectPath: string, fileContent: string, filePath: string, diff: string, context: { skills: string; rules: string }) => Promise<ReviewResult>;
+  detectTests: (
+    projectPath: string,
+    framework?: string
+  ) => Promise<RunTestsResult>;
+  runTests: (
+    projectPath: string,
+    testFile?: string,
+    testName?: string,
+    framework?: string
+  ) => Promise<RunTestsResult>;
+  detectTestFrameworks: (
+    projectPath: string
+  ) => Promise<DetectFrameworksResult>;
+  review: (
+    projectPath: string,
+    fileContent: string,
+    filePath: string,
+    diff: string,
+    context: { skills: string; rules: string }
+  ) => Promise<ReviewResult>;
   testUpdate: () => Promise<void>;
-  onUpdateAvailable: (callback: (event: unknown, info: { version: string }) => void) => () => void;
-  onUpdateDownloaded: (callback: (event: unknown, info: { version: string }) => void) => () => void;
+  onUpdateAvailable: (
+    callback: (event: unknown, info: { version: string }) => void
+  ) => () => void;
+  onUpdateDownloaded: (
+    callback: (event: unknown, info: { version: string }) => void
+  ) => () => void;
   restartAndUpdate: () => void;
 }
 
