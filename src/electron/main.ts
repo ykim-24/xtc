@@ -18,9 +18,10 @@ import { spawn } from "child_process";
 import * as pty from "node-pty";
 import * as os from "os";
 import * as crypto from "crypto";
-// @ts-ignore - electron-updater CommonJS import
-import * as electronUpdater from "electron-updater";
-const autoUpdater = electronUpdater.autoUpdater;
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+// electron-updater is CommonJS, use require for proper import
+const { autoUpdater } = require("electron-updater");
 import { IGNORED_PATHS } from "../shared/constants/index.js";
 import { lspManager } from "./lspManager.js";
 import {
@@ -192,13 +193,13 @@ app.whenReady().then(() => {
     systemLogger.info("Auto-updater: Current version:", app.getVersion());
 
     // Check for updates
-    autoUpdater.checkForUpdatesAndNotify().then((result) => {
+    autoUpdater.checkForUpdatesAndNotify().then((result: { updateInfo?: { version: string } } | null) => {
       if (result) {
         systemLogger.info("Auto-updater: Check result - update info:", result.updateInfo?.version);
       } else {
         systemLogger.info("Auto-updater: No update info returned");
       }
-    }).catch((err) => {
+    }).catch((err: Error) => {
       systemLogger.error("Auto-updater: Check failed:", err);
     });
 
@@ -207,7 +208,7 @@ app.whenReady().then(() => {
       systemLogger.info("Auto-updater: Checking for update...");
     });
 
-    autoUpdater.on("update-not-available", (info) => {
+    autoUpdater.on("update-not-available", (info: { version: string }) => {
       systemLogger.info("Auto-updater: No update available. Latest:", info?.version);
     });
 
@@ -216,11 +217,11 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send("update-available", info);
     });
 
-    autoUpdater.on("download-progress", (progress) => {
+    autoUpdater.on("download-progress", (progress: { percent: number }) => {
       systemLogger.info(`Auto-updater: Download progress: ${Math.round(progress.percent)}%`);
     });
 
-    autoUpdater.on("update-downloaded", (info) => {
+    autoUpdater.on("update-downloaded", (info: { version: string; releaseNotes?: string | Array<{ note: string }> }) => {
       systemLogger.info("Auto-updater: Update downloaded:", info.version);
       const releaseNotes =
         typeof info.releaseNotes === "string" ? info.releaseNotes : null;
