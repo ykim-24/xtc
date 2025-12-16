@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2025-12-16
+
+### Added
+- PR creation modal with auto-generated titles and descriptions using Claude
+- Base branch detection using GitHub CLI for more accurate PR targeting
+- `git:mergeBase` IPC handler for finding the branch fork point
+- Worktree navigation from branch dropdown - clicking a branch with an existing worktree switches to that directory
+
+### Changed
+- ConfirmModal buttons now use text-link styling for consistency
+- Explorer header has improved spacing and minimum height
+
+### Fixed
+- Base branch names are now properly cleaned (removes `origin/` prefixes) when creating PRs
+
+## [0.2.2] - 2025-12-16
+
+### Fixed
+- Use `app.isPackaged` instead of `NODE_ENV` for dev detection in Electron main process
+
+## [0.2.1] - 2025-12-16
+
+### Fixed
+- Correct renderer path resolution for production builds
+
 ## [0.2.0] - 2025-12-15
 
 ### Added
