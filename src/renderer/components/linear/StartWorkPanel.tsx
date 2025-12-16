@@ -348,6 +348,14 @@ export function StartWorkPanel({
     }
   }, [needsInput]);
 
+  // Close modal if session was removed externally (e.g., from another panel)
+  useEffect(() => {
+    if (isOpen && currentSessionId && !session) {
+      // Session was removed externally, close this modal
+      onClose();
+    }
+  }, [isOpen, currentSessionId, session, onClose]);
+
   // Initialize session when opened
   useEffect(() => {
     if (!isOpen) return;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { X, Check, XIcon, ChevronRight, ChevronLeft, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { X, Check, XIcon, ChevronRight, ChevronLeft, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw, Search, Trash2, Wrench } from 'lucide-react';
 import { useSkillsStore, useRulesStore, useChatStore } from '@/stores';
 import { useProjectStore } from '@/stores/projectStore';
 
@@ -25,6 +25,7 @@ interface ReviewComment {
   endLine: number | null;
   message: string;
   rule?: string;
+  suggestedFix?: string | null;
   status: 'pending' | 'approved' | 'rejected';
   author: 'claude' | 'user';
 }
@@ -138,6 +139,7 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [existingPRComments, setExistingPRComments] = useState<Array<{ path: string; line: number; startLine?: number; body: string; user: string }>>([]);
   const [loadingPRComments, setLoadingPRComments] = useState(true);
+  const [applyingFix, setApplyingFix] = useState<string | null>(null); // comment ID being fixed
   const searchInputRef = useRef<HTMLInputElement>(null);
   const diffRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -756,6 +758,7 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                 endLine,
                 message: issue.message,
                 rule: issue.rule,
+                suggestedFix: issue.suggestedFix || null,
                 status: 'pending',
                 author: 'claude'
               });
@@ -1123,6 +1126,70 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
     });
   };
 
+  // Apply a suggested fix using Claude
+  const handleApplyFix = async (fileIndex: number, commentId: string) => {
+    const file = reviewData[fileIndex];
+    const comment = file.comments.find(c => c.id === commentId);
+
+    if (!comment || !comment.suggestedFix) return;
+
+    setApplyingFix(commentId);
+
+    try {
+      // Read the current file content
+      const fileContent = await window.electron?.readFile(projectPath + '/' + file.path);
+
+      if (!fileContent?.success || !fileContent.content) {
+        console.error('Failed to read file for fix');
+        setApplyingFix(null);
+        return;
+      }
+
+      // Build a prompt for Claude to apply the fix
+      const fixPrompt = `Apply this fix to the file. Only output the modified code section, nothing else.
+
+FILE: ${file.path}
+ISSUE: ${comment.message}
+${comment.startLine ? `LOCATION: Lines ${comment.startLine}${comment.endLine && comment.endLine !== comment.startLine ? `-${comment.endLine}` : ''}` : ''}
+SUGGESTED FIX: ${comment.suggestedFix}
+
+CURRENT FILE CONTENT:
+\`\`\`
+${fileContent.content}
+\`\`\`
+
+Apply the suggested fix and output the complete modified file content. Make sure the fix is valid and doesn't break anything.`;
+
+      const result = await window.electron?.claude.send(
+        fixPrompt,
+        { activeFile: file.path, contextFiles: [] },
+        projectPath
+      );
+
+      if (result?.success) {
+        // Mark the comment as approved after fix is applied
+        handleCommentAction(fileIndex, commentId, 'approved');
+
+        // Refresh the diff to show updated content
+        const diffResult = await window.electron?.git.diff(projectPath, selectedBaseBranch, file.path);
+        if (diffResult?.success) {
+          setReviewData(prev => {
+            const newData = [...prev];
+            newData[fileIndex] = {
+              ...newData[fileIndex],
+              diff: diffResult.diff || ''
+            };
+            return newData;
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to apply fix:', err);
+    } finally {
+      setApplyingFix(null);
+    }
+  };
+
   // Line selection handlers
   const handleLineMouseDown = (lineNum: number, e: React.MouseEvent) => {
     if (e.button !== 0) return; // Left click only
@@ -1315,9 +1382,29 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                   {comment.rule && (
                     <p className="text-[10px] text-text-muted mt-0.5">Rule: {comment.rule}</p>
                   )}
+                  {comment.suggestedFix && (
+                    <div className="mt-2 border-t border-border-secondary pt-2">
+                      <p className="text-[10px] text-text-muted mb-1">Suggested fix:</p>
+                      <pre className="text-[10px] text-green-400 bg-green-500/10 p-2 rounded overflow-x-auto whitespace-pre-wrap font-mono">{comment.suggestedFix}</pre>
+                    </div>
+                  )}
                 </div>
                 {comment.status === 'pending' && (
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {comment.suggestedFix && (
+                      <button
+                        onClick={() => handleApplyFix(fileIndex, comment.id)}
+                        disabled={applyingFix === comment.id}
+                        className="p-1 rounded hover:bg-blue-500/20 text-text-muted hover:text-blue-400 transition-colors disabled:opacity-50"
+                        title="Apply fix"
+                      >
+                        {applyingFix === comment.id ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Wrench className="w-3 h-3" />
+                        )}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleCommentAction(fileIndex, comment.id, 'approved')}
                       className="p-1 rounded hover:bg-green-500/20 text-text-muted hover:text-green-400 transition-colors"
@@ -2334,6 +2421,7 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
                               }`} />
                               <span className="font-mono text-[10px] text-text-secondary">{comment.filePath.split('/').pop()}</span>
                               <span className="truncate">{comment.message.slice(0, 50)}{comment.message.length > 50 ? '...' : ''}</span>
+                              {comment.suggestedFix && <span className="text-[10px] text-green-400" title="Has suggested fix">[fix]</span>}
                             </div>
                           ))}
                         </div>

@@ -11,6 +11,7 @@ import {
 } from "electron";
 import * as path from "path";
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import { watch, FSWatcher } from "fs";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
@@ -39,13 +40,80 @@ const __dirname = path.dirname(__filename);
 
 // Ensure PATH includes common locations for homebrew and other package managers
 const getEnvWithPath = () => {
+  const home = process.env.HOME || "";
+
+  // Find nvm node path if it exists
+  const nvmNodePaths: string[] = [];
+  const nvmDir = process.env.NVM_DIR || path.join(home, ".nvm");
+  try {
+    // Check for default alias first
+    const defaultAliasPath = path.join(nvmDir, "alias", "default");
+    if (fsSync.existsSync(defaultAliasPath)) {
+      const defaultVersion = fsSync.readFileSync(defaultAliasPath, "utf-8").trim();
+      // Resolve alias to actual version
+      const versionsDir = path.join(nvmDir, "versions", "node");
+      if (fsSync.existsSync(versionsDir)) {
+        const versions = fsSync.readdirSync(versionsDir).filter((v: string) => v.startsWith("v"));
+        const matchingVersion = versions.find((v: string) => v.startsWith(`v${defaultVersion}`) || v === defaultVersion);
+        if (matchingVersion) {
+          nvmNodePaths.push(path.join(versionsDir, matchingVersion, "bin"));
+        }
+      }
+    }
+    // Also check for NVM_BIN if set
+    if (process.env.NVM_BIN) {
+      nvmNodePaths.push(process.env.NVM_BIN);
+    }
+  } catch {
+    // nvm not available, ignore
+  }
+
+  // Find fnm node path if it exists
+  const fnmNodePaths: string[] = [];
+  try {
+    // fnm stores its data in different locations depending on platform
+    const fnmDirs = [
+      path.join(home, ".fnm"),
+      path.join(home, "Library", "Application Support", "fnm"),
+    ];
+    for (const fnmDir of fnmDirs) {
+      const nodeVersionsDir = path.join(fnmDir, "node-versions");
+      if (fsSync.existsSync(nodeVersionsDir)) {
+        // Get the most recently used version (by modification time)
+        const versions = fsSync.readdirSync(nodeVersionsDir);
+        if (versions.length > 0) {
+          // Try to find the default or latest LTS version
+          const defaultVersion = versions.find((v: string) => v.includes("lts")) || versions[versions.length - 1];
+          const binPath = path.join(nodeVersionsDir, defaultVersion, "installation", "bin");
+          if (fsSync.existsSync(binPath)) {
+            fnmNodePaths.push(binPath);
+          }
+        }
+        break;
+      }
+    }
+    // Also check FNM_MULTISHELL_PATH if set
+    if (process.env.FNM_MULTISHELL_PATH) {
+      fnmNodePaths.push(path.join(process.env.FNM_MULTISHELL_PATH, "bin"));
+    }
+  } catch {
+    // fnm not available, ignore
+  }
+
   const additionalPaths = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
+    // Node version manager paths
+    ...nvmNodePaths,
+    ...fnmNodePaths,
+    path.join(home, ".volta", "bin"),          // Volta
+    path.join(home, ".asdf", "shims"),         // asdf
+    // Standard paths
+    "/opt/homebrew/bin",                       // Homebrew on M1 Macs
+    "/usr/local/bin",                          // Common for Intel Macs / manual installs
     "/usr/bin",
     "/bin",
-    process.env.HOME + "/.local/bin",
+    path.join(home, ".local", "bin"),
   ];
+
   const currentPath = process.env.PATH || "";
   const newPath = [...additionalPaths, ...currentPath.split(":")].join(":");
   return { ...process.env, PATH: newPath };
@@ -3742,6 +3810,25 @@ ipcMain.handle(
     const result = await runGit(projectPath, args);
     // Return the resolved absolute path so it matches what git worktree list returns
     const resolvedPath = path.resolve(worktreePath);
+
+    // If worktree was created successfully, copy .env files from main repo
+    if (result.code === 0) {
+      try {
+        const envFiles = [".env", ".env.local", ".env.development", ".env.development.local"];
+        for (const envFile of envFiles) {
+          const srcPath = path.join(projectPath, envFile);
+          const destPath = path.join(resolvedPath, envFile);
+          if (fsSync.existsSync(srcPath) && !fsSync.existsSync(destPath)) {
+            fsSync.copyFileSync(srcPath, destPath);
+            gitLogger.info(`Copied ${envFile} to worktree`);
+          }
+        }
+      } catch (err) {
+        gitLogger.warn("Failed to copy .env files to worktree:", err);
+        // Don't fail the worktree creation if .env copy fails
+      }
+    }
+
     return {
       success: result.code === 0,
       error: result.stderr,
@@ -5439,7 +5526,8 @@ Review this code and respond with a JSON object (no markdown, just raw JSON):
       "startLine": <line number from the diff above, or null for general comments>,
       "endLine": <ending line number, same as startLine if single line>,
       "message": "<brief description>",
-      "rule": "<which rule/standard this violates, if any>"
+      "rule": "<which rule/standard this violates, if any>",
+      "suggestedFix": "<code snippet showing how to fix this issue, or null if not applicable>"
     }
   ],
   "highlights": [
