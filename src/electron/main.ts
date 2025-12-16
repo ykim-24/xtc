@@ -529,6 +529,60 @@ ipcMain.handle("file:readDir", async (_, dirPath: string) => {
   }
 });
 
+// Recursively list all files in a directory (for file search)
+ipcMain.handle("file:listAllFiles", async (_, dirPath: string) => {
+  const dirName = path.basename(dirPath);
+  fileLogger.debug(`Listing all files in: ${dirName}`);
+
+  // Directories to skip for performance
+  const SKIP_DIRS = new Set([
+    'node_modules', '.git', 'dist', 'build', '.next', '.nuxt',
+    'coverage', '.nyc_output', '.cache', '.parcel-cache',
+    '__pycache__', '.pytest_cache', 'venv', '.venv', 'env',
+    '.idea', '.vscode', '.DS_Store', 'vendor', 'target',
+    '.turbo', '.vercel', '.output', 'out', '.xtc'
+  ]);
+
+  const files: { path: string; name: string }[] = [];
+  const MAX_FILES = 10000; // Safety limit
+
+  async function walkDir(currentPath: string): Promise<void> {
+    if (files.length >= MAX_FILES) return;
+
+    try {
+      const entries = await fs.readdir(currentPath, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (files.length >= MAX_FILES) break;
+
+        const fullPath = path.join(currentPath, entry.name);
+
+        if (entry.isDirectory()) {
+          // Skip ignored directories
+          if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+            await walkDir(fullPath);
+          }
+        } else {
+          // Add file
+          files.push({ path: fullPath, name: entry.name });
+        }
+      }
+    } catch (error) {
+      // Skip directories we can't read
+      fileLogger.debug(`Skipping unreadable directory: ${currentPath}`);
+    }
+  }
+
+  try {
+    await walkDir(dirPath);
+    fileLogger.success(`Listed all files in: ${dirName}`, { count: files.length });
+    return { success: true, files };
+  } catch (error) {
+    fileLogger.error(`Failed to list files in: ${dirName}`, error);
+    return { success: false, error: String(error) };
+  }
+});
+
 ipcMain.handle("file:delete", async (_, filePath: string) => {
   const fileName = path.basename(filePath);
   fileLogger.debug(`Deleting: ${fileName}`);

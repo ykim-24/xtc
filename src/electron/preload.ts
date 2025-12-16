@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld("electron", {
   writeFile: (path: string, content: string) =>
     ipcRenderer.invoke("file:write", path, content),
   readDir: (path: string) => ipcRenderer.invoke("file:readDir", path),
+  listAllFiles: (path: string) => ipcRenderer.invoke("file:listAllFiles", path),
   deleteFile: (path: string) => ipcRenderer.invoke("file:delete", path),
   renameFile: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke("file:rename", oldPath, newPath),

@@ -23,6 +23,12 @@ interface ReadDirResult {
   error?: string;
 }
 
+interface ListAllFilesResult {
+  success: boolean;
+  files?: { path: string; name: string }[];
+  error?: string;
+}
+
 interface FileChangeEvent {
   eventType: string;
   filename: string;
@@ -748,6 +754,7 @@ interface ElectronAPI {
   ) => Promise<{ success: boolean; data?: string; error?: string }>;
   writeFile: (path: string, content: string) => Promise<WriteFileResult>;
   readDir: (path: string) => Promise<ReadDirResult>;
+  listAllFiles: (path: string) => Promise<ListAllFilesResult>;
   deleteFile: (path: string) => Promise<WriteFileResult>;
   renameFile: (oldPath: string, newPath: string) => Promise<WriteFileResult>;
   loadTypes: (projectPath: string) => Promise<LoadTypesResult>;

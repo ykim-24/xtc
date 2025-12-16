@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useTestStore } from '@/stores/testStore';
 import { useProjectStore } from '@/stores';
 import { TestTree } from './TestTree';
@@ -16,6 +16,9 @@ const frameworkNames: Record<string, string> = {
 export function TestPanel() {
   const { isRunning, setRunning, setTestFiles, testFiles, detectTests, setError, setOutput, isDetecting, selectedFramework, setSelectedFramework } = useTestStore();
   const { projectPath } = useProjectStore();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-detect tests when panel mounts or framework changes
   useEffect(() => {
@@ -88,6 +91,34 @@ export function TestPanel() {
           <h2 className="text-sm font-medium text-text-primary">
             {selectedFramework ? frameworkNames[selectedFramework] : 'Tests'}
           </h2>
+          <span className="text-text-muted">/</span>
+          {/* Inline search */}
+          <div className="flex items-center text-xs font-mono text-text-muted">
+            <span>[ </span>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setIsSearchFocused(true)}
+              onBlur={() => setIsSearchFocused(false)}
+              placeholder="search 4 test..."
+              className="px-1 bg-transparent text-text-primary placeholder-text-muted focus:outline-none"
+              style={{ width: searchQuery ? `${Math.max(searchQuery.length * 7 + 20, 260)}px` : '260px' }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
+                className="text-text-muted hover:text-text-primary"
+              >
+                ×
+              </button>
+            )}
+            <span> ]</span>
+          </div>
         </div>
         <button
           onClick={handleRunAll}
@@ -106,7 +137,7 @@ export function TestPanel() {
         {/* Left: Test tree */}
         <div className="w-1/2 border-r border-border-primary overflow-auto">
           {testFiles.length > 0 ? (
-            <TestTree />
+            <TestTree searchQuery={searchQuery} />
           ) : (
             <div className="flex items-center justify-center h-full text-text-muted text-sm">
               {isDetecting ? 'Detecting tests...' : isRunning ? 'Running tests...' : '-- no test file --'}

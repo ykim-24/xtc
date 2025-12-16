@@ -465,9 +465,45 @@ function FileItem({ file, onRunFile, onRunTest, onRunDescribe, isRunning }: File
   );
 }
 
-export function TestTree() {
+interface TestTreeProps {
+  searchQuery?: string;
+}
+
+export function TestTree({ searchQuery = '' }: TestTreeProps) {
   const { testFiles, isRunning, setRunning, setTestFiles, setError, setOutput, selectedFramework } = useTestStore();
   const { projectPath } = useProjectStore();
+
+  // Filter test files based on search query
+  const filteredTestFiles = useMemo(() => {
+    if (!searchQuery.trim()) return testFiles;
+
+    const query = searchQuery.toLowerCase();
+    return testFiles
+      .map(file => {
+        // Check if file name matches
+        const fileNameMatches = file.name.toLowerCase().includes(query);
+
+        // Filter tests that match the query
+        const matchingTests = file.tests.filter(test =>
+          test.name.toLowerCase().includes(query) ||
+          test.fullName.toLowerCase().includes(query) ||
+          test.ancestorTitles.some(title => title.toLowerCase().includes(query))
+        );
+
+        // Include file if file name matches OR any tests match
+        if (fileNameMatches || matchingTests.length > 0) {
+          return {
+            ...file,
+            // If file name matches, show all tests; otherwise show only matching tests
+            tests: fileNameMatches ? file.tests : matchingTests,
+            // Auto-expand when searching
+            expanded: true,
+          };
+        }
+        return null;
+      })
+      .filter((file): file is NonNullable<typeof file> => file !== null);
+  }, [testFiles, searchQuery]);
 
   const handleRunFile = async (file: TestFile) => {
     if (!projectPath || isRunning) return;
@@ -689,16 +725,22 @@ export function TestTree() {
 
   return (
     <div className="py-1">
-      {testFiles.map((file) => (
-        <FileItem
-          key={file.path}
-          file={file}
-          onRunFile={handleRunFile}
-          onRunTest={handleRunTest}
-          onRunDescribe={handleRunDescribe}
-          isRunning={isRunning}
-        />
-      ))}
+      {filteredTestFiles.length === 0 && searchQuery ? (
+        <div className="flex items-center justify-center py-8 text-text-muted text-xs">
+          No tests match "{searchQuery}"
+        </div>
+      ) : (
+        filteredTestFiles.map((file) => (
+          <FileItem
+            key={file.path}
+            file={file}
+            onRunFile={handleRunFile}
+            onRunTest={handleRunTest}
+            onRunDescribe={handleRunDescribe}
+            isRunning={isRunning}
+          />
+        ))
+      )}
     </div>
   );
 }

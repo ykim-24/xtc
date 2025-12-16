@@ -316,9 +316,57 @@ Project-specific settings stored in `.xtc/` directory:
 
 ---
 
+### 13. Git Integration (`src/renderer/components/git/`)
+
+#### Git Panel (`GitPanel.tsx`)
+- Current branch display with branch switcher
+- Changed files list (modified, staged, untracked)
+- Stage/unstage files
+- Commit with message
+- Push/pull to/from remote
+- Create PR with auto-generated descriptions using Claude
+- Base branch detection using GitHub CLI
+
+#### Git Worktrees
+- Work on multiple branches simultaneously
+- Each worktree is a separate directory sharing git history
+- Switch between worktrees from branch dropdown
+- Worktree navigation integrated with file explorer
+
+#### PR Creation
+- Create PR modal with title and description
+- Auto-generate PR descriptions using Claude
+- Select base branch with smart defaults
+- Uses `gh` CLI for GitHub operations
+
+---
+
+### 14. AI-Assisted PR Review (`src/renderer/components/git/ReviewPanel.tsx`)
+
+- View PRs within the IDE
+- Claude analyzes diff and suggests review comments
+- Review Claude's suggestions before posting (approve/edit/reject each)
+- Suggested fix field with fix button to apply changes via Claude
+- Batch approve/post comments
+
+---
+
+### 15. Linear Integration (`src/renderer/components/linear/`)
+
+#### Linear Panel (`LinearPanel.tsx`)
+- Connect to Linear workspace
+- View assigned issues
+- Issue details and status
+
+#### Start Work Flow (`StartWorkPanel.tsx`)
+- Start work on Linear issues
+- Create branch from issue
+- Session management with minimized indicators
+- Questions modal for clarifications
+
+---
+
 ## Planned Features
 
-- [ ] Linear integration support
 - [ ] Explorer file organization (grouping, filtering)
 - [ ] Datadog integration for logs and dashboards
-- [ ] Start work flow with sub-issue branching (parent branch → sub-issue branches)

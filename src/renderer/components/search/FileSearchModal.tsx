@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useProjectStore } from '@/stores';
-import { FileTreeNode } from '@/stores/projectStore';
 import { FileIcon } from '@/utils/fileIcons';
 
 // File extension to language mapping
@@ -48,21 +47,6 @@ interface FileSearchModalProps {
   onClose: () => void;
 }
 
-// Flatten file tree to get all file paths
-function flattenFiles(nodes: FileTreeNode[], parentPath = ''): { path: string; name: string }[] {
-  const files: { path: string; name: string }[] = [];
-
-  for (const node of nodes) {
-    if (node.type === 'file') {
-      files.push({ path: node.path, name: node.name });
-    } else if (node.children) {
-      files.push(...flattenFiles(node.children, node.path));
-    }
-  }
-
-  return files;
-}
-
 // Simple fuzzy match - checks if query chars appear in order
 function fuzzyMatch(query: string, text: string): { match: boolean; score: number } {
   const lowerQuery = query.toLowerCase();
@@ -103,13 +87,29 @@ function fuzzyMatch(query: string, text: string): { match: boolean; score: numbe
 export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [allFiles, setAllFiles] = useState<{ path: string; name: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { fileTree, openFile, projectPath, revealInExplorer } = useProjectStore();
+  const { openFile, projectPath, revealInExplorer } = useProjectStore();
 
-  // Get all files from tree
-  const allFiles = useMemo(() => flattenFiles(fileTree), [fileTree]);
+  // Load all files when modal opens
+  const loadAllFiles = useCallback(async () => {
+    if (!projectPath) return;
+
+    setIsLoading(true);
+    try {
+      const result = await window.electron?.listAllFiles(projectPath);
+      if (result?.success && result.files) {
+        setAllFiles(result.files);
+      }
+    } catch (error) {
+      console.error('Failed to load files:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [projectPath]);
 
   // Filter and sort by match score
   const filteredFiles = useMemo(() => {
@@ -132,14 +132,15 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
       .slice(0, 50);
   }, [allFiles, query]);
 
-  // Reset state when opening
+  // Reset state and load files when opening
   useEffect(() => {
     if (isOpen) {
       setQuery('');
       setSelectedIndex(0);
+      loadAllFiles();
       setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [isOpen]);
+  }, [isOpen, loadAllFiles]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -235,7 +236,11 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
           ref={listRef}
           className="max-h-[300px] overflow-y-auto"
         >
-          {filteredFiles.length === 0 ? (
+          {isLoading ? (
+            <div className="px-3 py-4 text-center text-text-muted text-xs">
+              Loading files...
+            </div>
+          ) : filteredFiles.length === 0 ? (
             <div className="px-3 py-4 text-center text-text-muted text-xs">
               {query ? 'No files found' : 'No files in project'}
             </div>
