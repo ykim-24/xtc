@@ -3,6 +3,7 @@
 ## Planned Features
 
 ### GitHub Integration
+
 **Complexity: Medium | Priority: High**
 
 - Use `gh` CLI for GitHub operations (like we use `claude` CLI)
@@ -13,6 +14,7 @@
 - Issue tracking integration
 
 **AI-Assisted PR Review Mode:**
+
 - View other people's PRs within the IDE
 - Claude analyzes the diff and suggests review comments
 - Review Claude's suggestions before posting (approve/edit/reject each)
@@ -21,9 +23,11 @@
 - Learn from your edits to improve future suggestions
 
 ### Testing Visualization
+
 **Complexity: Medium | Priority: Medium**
 
 **Supported Test Runners:**
+
 - JavaScript/TypeScript: Jest, Vitest, Mocha
 - E2E/Browser: Playwright, Cypress
 - Python: pytest, unittest
@@ -32,6 +36,7 @@
 - Java/Kotlin: JUnit
 
 **Features:**
+
 - Parse JSON/structured output from test runners
 - Tree view of tests with pass/fail status
 - Click to jump to failing line in editor
@@ -42,6 +47,7 @@
 - Screenshot/video viewing for E2E failures (Playwright/Cypress)
 
 ### Parallelization
+
 **Complexity: High | Priority: Medium**
 
 - Git worktrees for multiple branches checked out simultaneously

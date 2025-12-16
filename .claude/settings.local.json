@@ -12,7 +12,8 @@
       "WebFetch(domain:www.randomnoun.com)",
       "Bash(curl:*)",
       "WebSearch",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []
