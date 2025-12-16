@@ -120,6 +120,16 @@ echo -e "${GREEN}  Build and publish complete! 🎉${NC}"
 echo -e "${GREEN}════════════════════════════════════${NC}"
 echo ""
 
+# Rebuild native modules for local dev (arm64)
+echo -e "${BLUE}Rebuilding native modules for local development...${NC}"
+npx electron-rebuild > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ Native modules rebuilt for arm64${NC}"
+else
+    echo -e "${YELLOW}⚠ Failed to rebuild native modules. Run 'npx electron-rebuild' manually.${NC}"
+fi
+echo ""
+
 # Ask if we should commit and tag
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
     read -p "Commit version bump and create git tag? [y/N]: " SHOULD_TAG

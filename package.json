@@ -17,6 +17,7 @@
     "publish:win": "npm run build:electron && vite build && electron-builder --win --publish always",
     "publish:linux": "npm run build:electron && vite build && electron-builder --linux --publish always",
     "release": "./scripts/publish.sh",
+    "rebuild": "npx electron-rebuild",
     "build:renderer": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
