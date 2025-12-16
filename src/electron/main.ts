@@ -120,17 +120,40 @@ app.whenReady().then(() => {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
 
+    systemLogger.info("Auto-updater: Starting update check...");
+    systemLogger.info("Auto-updater: Current version:", app.getVersion());
+
     // Check for updates
-    autoUpdater.checkForUpdatesAndNotify();
+    autoUpdater.checkForUpdatesAndNotify().then((result) => {
+      if (result) {
+        systemLogger.info("Auto-updater: Check result - update info:", result.updateInfo?.version);
+      } else {
+        systemLogger.info("Auto-updater: No update info returned");
+      }
+    }).catch((err) => {
+      systemLogger.error("Auto-updater: Check failed:", err);
+    });
 
     // Auto-updater events
+    autoUpdater.on("checking-for-update", () => {
+      systemLogger.info("Auto-updater: Checking for update...");
+    });
+
+    autoUpdater.on("update-not-available", (info) => {
+      systemLogger.info("Auto-updater: No update available. Latest:", info?.version);
+    });
+
     autoUpdater.on("update-available", (info: { version: string }) => {
-      systemLogger.info("Update available:", info.version);
+      systemLogger.info("Auto-updater: Update available:", info.version);
       mainWindow?.webContents.send("update-available", info);
     });
 
+    autoUpdater.on("download-progress", (progress) => {
+      systemLogger.info(`Auto-updater: Download progress: ${Math.round(progress.percent)}%`);
+    });
+
     autoUpdater.on("update-downloaded", (info) => {
-      systemLogger.info("Update downloaded:", info.version);
+      systemLogger.info("Auto-updater: Update downloaded:", info.version);
       const releaseNotes =
         typeof info.releaseNotes === "string" ? info.releaseNotes : null;
       mainWindow?.webContents.send("update-downloaded", {
@@ -146,7 +169,8 @@ app.whenReady().then(() => {
     });
 
     autoUpdater.on("error", (err: Error) => {
-      systemLogger.error("Auto-updater error:", err);
+      systemLogger.error("Auto-updater error:", err.message);
+      systemLogger.error("Auto-updater error stack:", err.stack);
     });
   }
 
@@ -305,6 +329,11 @@ async function addToGitExclude(projectPath: string) {
     // Not a git repo or no access - silently ignore
   }
 }
+
+// App info
+ipcMain.handle("app:getVersion", () => {
+  return app.getVersion();
+});
 
 // Shell operations
 ipcMain.handle("shell:openExternal", async (_event, url: string) => {

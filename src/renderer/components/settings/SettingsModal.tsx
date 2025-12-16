@@ -1,6 +1,6 @@
 import { X, Monitor, Code, Bot, Keyboard } from 'lucide-react';
 import { useSettingsStore } from '@/stores';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -11,6 +11,13 @@ type SettingsTab = 'appearance' | 'editor' | 'claude' | 'shortcuts';
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
+  const [version, setVersion] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen) {
+      window.electron?.getVersion().then(setVersion);
+    }
+  }, [isOpen]);
 
   const {
     theme, setTheme,
@@ -101,7 +108,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       {/* Modal */}
       <div className="relative w-[700px] h-[500px] bg-bg-primary border border-border-primary rounded-lg shadow-xl flex overflow-hidden">
         {/* Sidebar */}
-        <div className="w-48 bg-bg-secondary border-r border-border-primary p-2 flex-shrink-0">
+        <div className="w-48 bg-bg-secondary border-r border-border-primary p-2 flex-shrink-0 flex flex-col">
           <div className="text-xs font-semibold text-text-muted uppercase tracking-wider px-3 py-2">
             Settings
           </div>
@@ -119,6 +126,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {tab.label}
             </button>
           ))}
+          <div className="mt-auto pt-4 px-3 pb-2">
+            <div className="text-xs text-text-muted">
+              v{version || '...'}
+            </div>
+          </div>
         </div>
 
         {/* Content */}

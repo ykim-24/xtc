@@ -1,8 +1,11 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { ThemeName } from "@/themes/tokens";
 
 interface SettingsState {
+  // Hydration state
+  _hasHydrated: boolean;
+  setHasHydrated: (state: boolean) => void;
   // User
   userName: string;
   setUserName: (name: string) => void;
@@ -83,6 +86,10 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      // Hydration state
+      _hasHydrated: false,
+      setHasHydrated: (state) => set({ _hasHydrated: state }),
+
       // User
       userName: "",
       setUserName: (userName) => set({ userName }),
@@ -162,6 +169,15 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "xtc-settings",
+      storage: createJSONStorage(() => localStorage),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+      partialize: (state) => {
+        // Don't persist _hasHydrated
+        const { _hasHydrated, setHasHydrated, ...rest } = state;
+        return rest;
+      },
     }
   )
 );

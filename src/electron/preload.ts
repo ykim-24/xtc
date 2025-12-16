@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("electron", {
   // Open external URL in default browser
   openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),
 
+  // App info
+  getVersion: () => ipcRenderer.invoke("app:getVersion"),
+
   // System events (power management)
   onSystemSleep: (callback: () => void) => {
     const handler = () => callback();

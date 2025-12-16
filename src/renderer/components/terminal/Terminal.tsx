@@ -3,7 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Plus, X, TerminalIcon } from 'lucide-react';
-import { Panel, IconButton } from '@/components/ui';
+import { IconButton } from '@/components/ui';
 import { useProjectStore } from '@/stores';
 import '@xterm/xterm/css/xterm.css';
 
@@ -29,7 +29,11 @@ export function TerminalPanel() {
   // Create xterm instance for a terminal
   const createXtermInstance = useCallback((terminalId: string): TerminalInstance => {
     const element = document.createElement('div');
-    element.style.height = '100%';
+    element.style.position = 'absolute';
+    element.style.top = '0';
+    element.style.left = '0';
+    element.style.right = '0';
+    element.style.bottom = '0';
     element.style.display = 'none';
 
     const xterm = new XTerm({
@@ -96,10 +100,16 @@ export function TerminalPanel() {
     if (containerRef.current) {
       containerRef.current.appendChild(instance.element);
       instance.xterm.open(instance.element);
-      instance.fitAddon.fit();
 
-      // Send initial size to PTY
-      window.electron.terminal.resize(tabId, instance.xterm.cols, instance.xterm.rows);
+      // Delay fit to ensure container has proper dimensions
+      // This fixes positioning issues in production builds
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          instance.fitAddon.fit();
+          // Send initial size to PTY
+          window.electron?.terminal.resize(tabId, instance.xterm.cols, instance.xterm.rows);
+        }, 50);
+      });
     }
 
     setTabs((prev) => {
@@ -192,10 +202,26 @@ export function TerminalPanel() {
   // Create first terminal on mount (with guard against StrictMode double-mount)
   useEffect(() => {
     if (initializedRef.current) return;
-    if (!window.electron?.terminal) return;
 
-    initializedRef.current = true;
-    createTerminal();
+    // In production, window.electron may not be ready immediately
+    // Retry a few times with delay, and wait for container to be ready
+    const tryCreate = (attempts = 0) => {
+      if (initializedRef.current) return;
+
+      if (window.electron?.terminal && containerRef.current) {
+        initializedRef.current = true;
+        // Small delay to ensure layout is stable
+        setTimeout(() => {
+          createTerminal();
+        }, 100);
+      } else if (attempts < 20) {
+        // Retry up to 20 times with 100ms delay (2 seconds total)
+        setTimeout(() => tryCreate(attempts + 1), 100);
+      }
+    };
+
+    // Start with a small delay to let the component mount fully
+    setTimeout(() => tryCreate(), 50);
 
     // Cleanup on unmount
     return () => {
@@ -205,7 +231,7 @@ export function TerminalPanel() {
       });
       terminalInstancesRef.current.clear();
     };
-  }, [createTerminal]);
+  }, []); // Empty deps - only run on mount
 
   // Change directory when project path changes
   useEffect(() => {
@@ -214,60 +240,60 @@ export function TerminalPanel() {
   }, [projectPath]);
 
   return (
-    <Panel
-      title="Terminal"
-      className="h-full border-t border-border-primary"
-      actions={
+    <div className="h-full flex flex-col border-t border-border-primary bg-bg-secondary">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border-secondary flex-shrink-0">
+        <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+          Terminal
+        </span>
         <IconButton size="sm" onClick={createTerminal} title="New Terminal">
           <Plus className="w-3.5 h-3.5" />
         </IconButton>
-      }
-    >
-      <div className="flex flex-col h-full">
-        {/* Tabs */}
-        {tabs.length > 1 && (
-          <div className="flex items-center gap-1 px-2 py-1 border-b border-border-primary bg-bg-secondary">
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTabId(tab.id)}
-                className={`flex items-center gap-1 px-2 py-1 text-xs rounded ${
-                  activeTabId === tab.id
-                    ? 'bg-bg-tertiary text-text-primary'
-                    : 'text-text-muted hover:text-text-secondary'
-                }`}
-              >
-                <TerminalIcon className="w-3 h-3" />
-                <span>{tab.name}</span>
-                <X
-                  className="w-3 h-3 ml-1 hover:text-accent-error"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeTerminal(tab.id);
-                  }}
-                />
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Terminal container - holds all terminal elements */}
-        <div ref={containerRef} className="flex-1 p-1 overflow-hidden" />
-
-        {/* Empty state */}
-        {tabs.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-text-muted">
-            <TerminalIcon className="w-8 h-8 mb-2 opacity-50" />
-            <p className="text-sm">No terminal</p>
-            <button
-              onClick={createTerminal}
-              className="text-xs text-accent-primary hover:underline mt-1"
-            >
-              Create terminal
-            </button>
-          </div>
-        )}
       </div>
-    </Panel>
+
+      {/* Tabs */}
+      {tabs.length > 1 && (
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-border-primary bg-bg-secondary flex-shrink-0">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTabId(tab.id)}
+              className={`flex items-center gap-1 px-2 py-1 text-xs rounded ${
+                activeTabId === tab.id
+                  ? 'bg-bg-tertiary text-text-primary'
+                  : 'text-text-muted hover:text-text-secondary'
+              }`}
+            >
+              <TerminalIcon className="w-3 h-3" />
+              <span>{tab.name}</span>
+              <X
+                className="w-3 h-3 ml-1 hover:text-accent-error"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTerminal(tab.id);
+                }}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Terminal container - holds all terminal elements */}
+      <div ref={containerRef} className="flex-1 min-h-0 p-1 overflow-hidden relative" />
+
+      {/* Empty state */}
+      {tabs.length === 0 && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-text-muted">
+          <TerminalIcon className="w-8 h-8 mb-2 opacity-50" />
+          <p className="text-sm">No terminal</p>
+          <button
+            onClick={createTerminal}
+            className="text-xs text-accent-primary hover:underline mt-1"
+          >
+            Create terminal
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

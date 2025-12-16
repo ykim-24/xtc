@@ -7,6 +7,7 @@ import { StartWorkPanel } from "@/components/linear/StartWorkPanel";
 import { useSettingsStore, useStartWorkStore } from "@/stores";
 
 export function App() {
+  const hasHydrated = useSettingsStore((state) => state._hasHydrated);
   const hasCompletedOnboarding = useSettingsStore(
     (state) => state.hasCompletedOnboarding
   );
@@ -105,6 +106,15 @@ export function App() {
       closeSessionPanel();
     }
   };
+
+  // Don't render until hydration completes to avoid flash of welcome screen
+  if (!hasHydrated) {
+    return (
+      <ThemeProvider>
+        <div className="w-screen h-screen bg-bg-primary" />
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ThemeProvider>

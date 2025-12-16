@@ -738,6 +738,7 @@ interface ElectronAPI {
   maximize: () => void;
   close: () => void;
   openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  getVersion: () => Promise<string>;
   onSystemSleep: (callback: () => void) => () => void;
   onSystemWake: (callback: () => void) => () => void;
   openFolder: () => Promise<string | null>;
