@@ -721,12 +721,16 @@ interface GitAPI {
   protectedBranches: (
     projectPath: string
   ) => Promise<GitProtectedBranchesResult>;
-  diff: (projectPath: string, staged?: boolean) => Promise<GitDiffResult>;
+  diff: (projectPath: string, staged?: boolean, baseBranch?: string) => Promise<GitDiffResult>;
   diffFiles: (
     projectPath: string,
     baseBranch?: string
   ) => Promise<GitDiffFilesResult>;
   prDiffFiles: (projectPath: string) => Promise<GitDiffFilesResult>;
+  mergeBase: (
+    projectPath: string,
+    branches: string[]
+  ) => Promise<{ success: boolean; branch: string; distance: number }>;
 }
 
 interface ElectronAPI {

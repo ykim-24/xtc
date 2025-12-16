@@ -27,25 +27,25 @@ export function ConfirmModal({
   };
 
   const confirmButtonClass = {
-    danger: 'bg-red-500 hover:bg-red-600 text-white',
-    warning: 'bg-yellow-500 hover:bg-yellow-600 text-black',
-    default: 'bg-accent-primary hover:bg-accent-primary/80 text-white',
+    danger: 'text-text-secondary hover:text-red-400',
+    warning: 'text-text-secondary hover:text-yellow-400',
+    default: 'text-text-secondary hover:text-accent-primary',
   }[variant];
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} className="w-[400px]">
       <div className="p-4">
         <p className="text-sm text-text-secondary mb-6">{message}</p>
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-4">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 text-xs font-mono text-text-secondary hover:text-text-primary transition-colors rounded border border-border-primary hover:border-border-secondary"
+            className="text-xs font-mono text-text-secondary hover:text-text-primary transition-colors"
           >
             [ {cancelText.toLowerCase()} ]
           </button>
           <button
             onClick={handleConfirm}
-            className={`px-3 py-1.5 text-xs font-mono rounded transition-colors ${confirmButtonClass}`}
+            className={`text-xs font-mono transition-colors ${confirmButtonClass}`}
           >
             [ {confirmText.toLowerCase()} ]
           </button>

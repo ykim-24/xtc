@@ -575,7 +575,7 @@ export function Explorer() {
           onContextMenu={handleEmptySpaceContextMenu}
         >
           {projectPath && (
-            <div className="px-3 py-1 text-xs font-medium text-text-muted uppercase tracking-wider truncate">
+            <div className="px-3 py-1.5 text-xs font-medium text-text-muted uppercase tracking-wider truncate min-h-[24px] leading-4">
               {projectPath.split('/').pop()}
             </div>
           )}

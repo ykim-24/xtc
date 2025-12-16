@@ -5,7 +5,7 @@ import { PixelGit } from '@/components/feature-sidebar/PixelIcons';
 import { clsx } from 'clsx';
 import { useGitStore, useProjectStore, useTestStore, useChatStore, useWorktreeStore } from '@/stores';
 import { ReviewPanel } from './ReviewPanel';
-import { ConfirmModal } from '@/components/ui';
+import { ConfirmModal, Modal } from '@/components/ui';
 import globeToFolderGif from '@/assets/globe-to-folder.gif';
 
 const statusIcons: Record<string, string> = {
@@ -100,7 +100,7 @@ function parseAnsiOutput(text: string): React.ReactNode[] {
 }
 
 export function GitPanel() {
-  const { projectPath } = useProjectStore();
+  const { projectPath, setProjectPath } = useProjectStore();
   const { mode, setMode } = useTestStore();
   const {
     isRepo,
@@ -112,6 +112,7 @@ export function GitPanel() {
     changes,
     ahead,
     behind,
+    worktrees,
     isLoading,
     isFetching,
     lastFetchTime,
@@ -119,6 +120,7 @@ export function GitPanel() {
     isPushing,
     isPulling,
     isGeneratingMessage,
+    isCreatingPR,
     outputLog,
     refreshStatus,
     stageFiles,
@@ -131,7 +133,9 @@ export function GitPanel() {
     fetch,
     checkout,
     createBranch,
+    createPR,
     fetchProtectedBranches,
+    listWorktrees,
     generateCommitMessage,
     clearOutput,
     isReviewMode,
@@ -156,6 +160,15 @@ export function GitPanel() {
   const [isFixing, setIsFixing] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<{ inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; isClosed?: boolean } | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [showPRModal, setShowPRModal] = useState(false);
+  const [prTitle, setPrTitle] = useState('');
+  const [prBaseBranch, setPrBaseBranch] = useState('');
+  const [prDescription, setPrDescription] = useState('');
+  const [isGeneratingPRDescription, setIsGeneratingPRDescription] = useState(false);
+  const [showBaseBranchDropdown, setShowBaseBranchDropdown] = useState(false);
+  const [baseBranchSearch, setBaseBranchSearch] = useState('');
+  const baseBranchDropdownRef = useRef<HTMLDivElement>(null);
+  const baseBranchSearchRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const newBranchRef = useRef<HTMLDivElement>(null);
@@ -173,6 +186,10 @@ export function GitPanel() {
       if (newBranchRef.current && !newBranchRef.current.contains(event.target as Node)) {
         setShowNewBranchInput(false);
         setNewBranchName('');
+      }
+      if (baseBranchDropdownRef.current && !baseBranchDropdownRef.current.contains(event.target as Node)) {
+        setShowBaseBranchDropdown(false);
+        setBaseBranchSearch('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -192,6 +209,13 @@ export function GitPanel() {
       newBranchInputRef.current.focus();
     }
   }, [showNewBranchInput]);
+
+  // Focus base branch search when dropdown opens
+  useEffect(() => {
+    if (showBaseBranchDropdown && baseBranchSearchRef.current) {
+      baseBranchSearchRef.current.focus();
+    }
+  }, [showBaseBranchDropdown]);
 
   // Auto-refresh and fetch when page is shown (only if stale > 5 minutes)
   const FETCH_STALE_TIME = 5 * 60 * 1000; // 5 minutes in ms
@@ -414,7 +438,17 @@ export function GitPanel() {
 
   const handleCheckout = async (branchName: string) => {
     if (projectPath && branchName !== currentBranch) {
-      await checkout(projectPath, branchName);
+      // Check if a worktree exists for this branch
+      const worktreeForBranch = worktrees.find(wt => wt.branch === branchName);
+
+      if (worktreeForBranch && worktreeForBranch.path !== projectPath) {
+        // Switch to the worktree directory instead of checking out
+        setProjectPath(worktreeForBranch.path);
+      } else {
+        // No worktree for this branch, do regular checkout
+        await checkout(projectPath, branchName);
+      }
+
       setShowBranchDropdown(false);
       setBranchSearch('');
     }
@@ -436,6 +470,154 @@ export function GitPanel() {
       if (message) {
         setCommitMessage(message);
       }
+    }
+  };
+
+  const handleCreatePR = async () => {
+    if (!currentBranch || !projectPath) return;
+
+    // Fetch protected branches first
+    await fetchProtectedBranches(projectPath);
+
+    // Pre-fill title with branch name (convert dashes to spaces, capitalize first letter)
+    const title = currentBranch.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+    setPrTitle(title);
+
+    // Get the repo's default branch (what GitHub uses for PRs)
+    let defaultBase = 'main';
+    try {
+      const result = await window.electron?.git.defaultBranch(projectPath);
+      if (result?.success && result.branch) {
+        defaultBase = result.branch;
+      }
+    } catch {
+      // Fallback to develop > main > master
+      const commonBaseBranches = ['develop', 'main', 'master'];
+      defaultBase = branches.find(b => commonBaseBranches.includes(b)) || 'main';
+    }
+
+    setPrBaseBranch(defaultBase);
+    setPrDescription('');
+    setShowBaseBranchDropdown(false);
+    setBaseBranchSearch('');
+
+    setShowPRModal(true);
+    setIsGeneratingPRDescription(true);
+
+    try {
+      // Check for PR template
+      let template = '';
+      const templatePaths = [
+        `${projectPath}/.github/PULL_REQUEST_TEMPLATE.md`,
+        `${projectPath}/.github/pull_request_template.md`,
+        `${projectPath}/PULL_REQUEST_TEMPLATE.md`,
+        `${projectPath}/pull_request_template.md`,
+      ];
+
+      for (const templatePath of templatePaths) {
+        const result = await window.electron?.readFile(templatePath);
+        if (result?.success && result.content) {
+          template = result.content;
+          break;
+        }
+      }
+
+      // Get the diff files list against the base branch
+      const diffFilesResult = await window.electron?.git.diffFiles(projectPath, defaultBase);
+      const changedFiles = diffFilesResult?.success && diffFilesResult.files
+        ? diffFilesResult.files.map(f => `${f.status} ${f.path}`).join('\n')
+        : '';
+
+      // Get actual diff content (truncated for prompt)
+      const diffResult = await window.electron?.git.diff(projectPath, false, defaultBase);
+      const diff = diffResult?.success && diffResult.diff
+        ? (diffResult.diff.length > 4000 ? diffResult.diff.substring(0, 4000) + '\n... (truncated)' : diffResult.diff)
+        : '';
+
+      // Generate title and description using Claude with clear instructions
+      const prompt = template
+        ? `You are generating a PR title and description. Fill out this template based on the changes below. DO NOT use any tools. Just analyze and respond.
+
+PR Template:
+${template}
+
+Changed files:
+${changedFiles}
+
+Diff preview:
+${diff}
+
+Respond in this exact format:
+TITLE: <concise PR title, max 72 chars>
+DESCRIPTION:
+<filled template>`
+        : `You are generating a PR title and description. DO NOT use any tools. Just analyze the changes.
+
+Changed files:
+${changedFiles}
+
+Diff preview:
+${diff}
+
+Respond in this exact format:
+TITLE: <concise PR title, max 72 chars>
+DESCRIPTION:
+<brief summary (2-3 sentences) followed by key changes as bullet points>`;
+
+      const result = await window.electron?.claude.send(prompt, {}, projectPath);
+      if (result?.success && result.response) {
+        let response = result.response.trim();
+        // Clean up any markdown code blocks or JSON artifacts
+        response = response.replace(/^```\w*\n?|\n?```$/g, '');
+        response = response.replace(/^\s*\{[\s\S]*"type"[\s\S]*\}\s*$/gm, '');
+        response = response.replace(/^\s*\[[\s\S]*"tool_use"[\s\S]*\]\s*$/gm, '');
+
+        // Parse title and description
+        const titleMatch = response.match(/^TITLE:\s*(.+?)(?:\n|$)/im);
+        const descMatch = response.match(/DESCRIPTION:\s*([\s\S]*)/im);
+
+        if (titleMatch && titleMatch[1]) {
+          setPrTitle(titleMatch[1].trim());
+        }
+        if (descMatch && descMatch[1]) {
+          setPrDescription(descMatch[1].trim());
+        } else {
+          // Fallback: use entire response as description
+          setPrDescription(response.trim());
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate PR description:', err);
+    } finally {
+      setIsGeneratingPRDescription(false);
+    }
+  };
+
+  const handleSubmitPR = async () => {
+    if (!projectPath || !prTitle.trim() || !prBaseBranch) return;
+
+    // Clean up base branch - remove any remote prefixes
+    const cleanBaseBranch = prBaseBranch
+      .replace(/^remotes\/origin\//, '')
+      .replace(/^remotes\//, '')
+      .replace(/^origin\//, '');
+
+    const url = await createPR(projectPath, {
+      title: prTitle.trim(),
+      body: prDescription,
+      base: cleanBaseBranch,
+    });
+
+    setShowPRModal(false);
+    setPrTitle('');
+    setPrBaseBranch('');
+    setPrDescription('');
+    setShowBaseBranchDropdown(false);
+    setBaseBranchSearch('');
+
+    if (url) {
+      // Open the PR in browser
+      window.electron?.openExternal?.(url);
     }
   };
 
@@ -496,6 +678,174 @@ export function GitPanel() {
         cancelText="Cancel"
         variant="danger"
       />
+
+      {/* Create PR modal */}
+      <Modal
+        isOpen={showPRModal}
+        onClose={() => setShowPRModal(false)}
+        title="Create Pull Request"
+        className="w-[600px]"
+      >
+        <div className="p-4 space-y-4">
+          {/* Title input */}
+          <div>
+            <label className="block text-xs text-text-muted mb-1.5">
+              Title
+              {isGeneratingPRDescription && (
+                <span className="ml-2 text-accent-primary animate-pulse">generating...</span>
+              )}
+            </label>
+            <input
+              type="text"
+              value={prTitle}
+              onChange={(e) => setPrTitle(e.target.value)}
+              placeholder={isGeneratingPRDescription ? 'Generating title...' : 'PR title...'}
+              disabled={isGeneratingPRDescription}
+              className="w-full px-3 py-2 text-sm font-mono bg-bg-primary border border-border-primary rounded focus:outline-none focus:border-accent-primary text-text-primary placeholder-text-muted disabled:opacity-50"
+              autoFocus
+            />
+          </div>
+
+          {/* Base branch selector */}
+          <div>
+            <label className="block text-xs text-text-muted mb-1.5">Base branch</label>
+            <div className="relative" ref={baseBranchDropdownRef}>
+              {(() => {
+                const commonBaseBranches = ['develop', 'main', 'master', 'dev', 'staging'];
+                const baseBranches = protectedBranches.length > 0
+                  ? protectedBranches
+                  : branches.filter(b => commonBaseBranches.includes(b));
+                const isBaseBranch = baseBranches.includes(prBaseBranch);
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setShowBaseBranchDropdown(!showBaseBranchDropdown)}
+                    className={clsx(
+                      'w-full px-3 py-2 text-sm font-mono bg-bg-primary border border-border-primary rounded text-left flex items-center justify-between',
+                      'hover:border-border-secondary focus:outline-none focus:border-accent-primary',
+                      isBaseBranch ? 'text-yellow-500' : 'text-text-primary'
+                    )}
+                  >
+                    <span>{prBaseBranch || 'Select branch...'}</span>
+                    <ChevronDown className="w-3 h-3 text-text-muted" />
+                  </button>
+                );
+              })()}
+              {showBaseBranchDropdown && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-bg-secondary border border-border-primary rounded shadow-lg z-50">
+                  {/* Search input */}
+                  <div className="p-2 border-b border-border-primary">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-text-muted" />
+                      <input
+                        ref={baseBranchSearchRef}
+                        type="text"
+                        value={baseBranchSearch}
+                        onChange={(e) => setBaseBranchSearch(e.target.value)}
+                        placeholder="Search branches..."
+                        className="w-full pl-7 pr-2 py-1 text-xs font-mono bg-bg-primary border border-border-primary rounded focus:outline-none focus:border-accent-primary text-text-primary placeholder-text-muted"
+                      />
+                    </div>
+                  </div>
+                  {/* Branch list */}
+                  <div className="max-h-[200px] overflow-y-auto">
+                    {(() => {
+                      // Use protected branches or fallback to common base branches
+                      const commonBaseBranches = ['develop', 'main', 'master', 'dev', 'staging'];
+                      const baseBranches = protectedBranches.length > 0
+                        ? protectedBranches
+                        : branches.filter(b => commonBaseBranches.includes(b));
+
+                      // Get all branches except current, with base branches first
+                      const allBranches = branches
+                        .filter((b) => b !== currentBranch && b.toLowerCase().includes(baseBranchSearch.toLowerCase()))
+                        .sort((a, b) => {
+                          const aBase = baseBranches.includes(a);
+                          const bBase = baseBranches.includes(b);
+                          if (aBase && !bBase) return -1;
+                          if (!aBase && bBase) return 1;
+                          // Within base branches, sort by common order
+                          if (aBase && bBase) {
+                            return commonBaseBranches.indexOf(a) - commonBaseBranches.indexOf(b);
+                          }
+                          return a.localeCompare(b);
+                        });
+
+                      if (allBranches.length === 0) {
+                        return <div className="px-3 py-2 text-xs text-text-muted">No branches found</div>;
+                      }
+
+                      return allBranches.map((branch) => {
+                        const isBaseBranch = baseBranches.includes(branch);
+                        const isSelected = branch === prBaseBranch;
+                        return (
+                          <button
+                            key={branch}
+                            type="button"
+                            onClick={() => {
+                              setPrBaseBranch(branch);
+                              setShowBaseBranchDropdown(false);
+                              setBaseBranchSearch('');
+                            }}
+                            className={clsx(
+                              'w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-bg-hover transition-colors flex items-center justify-between',
+                              isSelected && 'bg-bg-active',
+                              isBaseBranch ? 'text-yellow-500' : 'text-text-primary'
+                            )}
+                          >
+                            <span className="truncate">{branch}</span>
+                            {isSelected && <span className="flex-shrink-0 ml-1">✓</span>}
+                          </button>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Description textarea */}
+          <div>
+            <label className="block text-xs text-text-muted mb-1.5">
+              Description
+              {isGeneratingPRDescription && (
+                <span className="ml-2 text-accent-primary animate-pulse">generating...</span>
+              )}
+            </label>
+            <textarea
+              value={prDescription}
+              onChange={(e) => setPrDescription(e.target.value)}
+              placeholder={isGeneratingPRDescription ? 'Generating description...' : 'PR description...'}
+              disabled={isGeneratingPRDescription}
+              className="w-full px-3 py-2 text-sm font-mono bg-bg-primary border border-border-primary rounded focus:outline-none focus:border-accent-primary text-text-primary placeholder-text-muted resize-none disabled:opacity-50"
+              rows={10}
+            />
+          </div>
+
+          {/* Info text */}
+          <p className="text-xs text-text-muted">
+            Creating PR from <span className="text-accent-primary font-mono">{currentBranch}</span> into <span className="text-accent-primary font-mono">{prBaseBranch}</span>
+          </p>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-4 pt-2">
+            <button
+              onClick={() => setShowPRModal(false)}
+              className="text-xs font-mono text-text-secondary hover:text-text-primary transition-colors"
+            >
+              [ cancel ]
+            </button>
+            <button
+              onClick={handleSubmitPR}
+              disabled={isCreatingPR || isGeneratingPRDescription || !prTitle.trim() || !prBaseBranch}
+              className="text-xs font-mono text-text-secondary hover:text-green-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-text-secondary transition-colors"
+            >
+              {isCreatingPR ? '[ creating... ]' : '[ create pr ]'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Fetching modal - Windows 98 style */}
       {isFetching && (
@@ -643,9 +993,10 @@ export function GitPanel() {
               onClick={() => {
                 const newState = !showBranchDropdown;
                 setShowBranchDropdown(newState);
-                // Fetch protected branches when opening dropdown
+                // Fetch protected branches and worktrees when opening dropdown
                 if (newState && projectPath) {
                   fetchProtectedBranches(projectPath);
+                  listWorktrees(projectPath);
                 }
               }}
               className="text-xs font-mono text-text-secondary hover:text-accent-primary transition-colors flex items-center gap-1"
@@ -671,13 +1022,19 @@ export function GitPanel() {
                 {/* Branch list */}
                 <div className="max-h-[250px] overflow-y-auto overflow-x-hidden">
                   {(() => {
+                    // Use protected branches or fallback to common base branches
+                    const commonBaseBranches = ['develop', 'main', 'master', 'dev', 'staging'];
+                    const highlightedBranches = protectedBranches.length > 0
+                      ? protectedBranches
+                      : branches.filter(b => commonBaseBranches.includes(b));
+
                     const filteredLocalBranches = branches
                       .filter((branch) => branch.toLowerCase().includes(branchSearch.toLowerCase()))
                       .sort((a, b) => {
-                        const aProtected = protectedBranches.includes(a);
-                        const bProtected = protectedBranches.includes(b);
-                        if (aProtected && !bProtected) return -1;
-                        if (!aProtected && bProtected) return 1;
+                        const aHighlighted = highlightedBranches.includes(a);
+                        const bHighlighted = highlightedBranches.includes(b);
+                        if (aHighlighted && !bHighlighted) return -1;
+                        if (!aHighlighted && bHighlighted) return 1;
                         return a.localeCompare(b);
                       });
 
@@ -706,7 +1063,7 @@ export function GitPanel() {
                               Local
                             </div>
                             {filteredLocalBranches.map((branch) => {
-                              const isProtected = protectedBranches.includes(branch);
+                              const isHighlighted = highlightedBranches.includes(branch);
                               const isCurrent = branch === currentBranch;
                               return (
                                 <button
@@ -715,7 +1072,7 @@ export function GitPanel() {
                                   className={clsx(
                                     'w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-bg-hover transition-colors flex items-center justify-between',
                                     isCurrent && 'bg-bg-active',
-                                    isProtected
+                                    isHighlighted
                                       ? 'text-yellow-500'
                                       : isCurrent
                                         ? 'text-accent-primary'
@@ -949,6 +1306,15 @@ export function GitPanel() {
                   >
                     {isPushing ? '[ pushing... ]' : `[ push${ahead > 0 ? ` (${ahead})` : ''} ]`}
                   </button>
+                  {currentBranch && remoteBranches.includes(`origin/${currentBranch}`) && (
+                    <button
+                      onClick={handleCreatePR}
+                      disabled={isCreatingPR}
+                      className="text-xs font-mono text-text-secondary hover:text-green-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-text-secondary transition-colors"
+                    >
+                      {isCreatingPR ? '[ creating... ]' : '[ create pr ]'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

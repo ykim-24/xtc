@@ -3746,6 +3746,12 @@ ipcMain.handle(
     projectPath: string,
     options: { title: string; body: string; base: string }
   ) => {
+    // Clean up base branch name - remove any remote prefixes
+    const baseBranch = options.base
+      .replace(/^remotes\/origin\//, "")
+      .replace(/^remotes\//, "")
+      .replace(/^origin\//, "");
+
     const proc = spawn(
       "gh",
       [
@@ -3756,7 +3762,7 @@ ipcMain.handle(
         "--body",
         options.body,
         "--base",
-        options.base,
+        baseBranch,
       ],
       {
         cwd: projectPath,
@@ -3823,6 +3829,24 @@ ipcMain.handle("git:pr:template", async (_, projectPath: string) => {
 
 // Get default branch from remote
 ipcMain.handle("git:defaultBranch", async (_, projectPath: string) => {
+  // Try GitHub CLI first - most reliable
+  try {
+    const ghResult = await new Promise<{ code: number; stdout: string }>((resolve) => {
+      const proc = spawn("gh", ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"], {
+        cwd: projectPath,
+        env: getEnvWithPath(),
+      });
+      let stdout = "";
+      proc.stdout.on("data", (data) => { stdout += data.toString(); });
+      proc.on("close", (code) => resolve({ code: code || 0, stdout }));
+    });
+    if (ghResult.code === 0 && ghResult.stdout.trim()) {
+      return { success: true, branch: ghResult.stdout.trim() };
+    }
+  } catch {
+    // Fall through to git methods
+  }
+
   // Try to get default branch from remote HEAD
   const result = await runGit(projectPath, [
     "symbolic-ref",
@@ -3831,14 +3855,17 @@ ipcMain.handle("git:defaultBranch", async (_, projectPath: string) => {
   ]);
   if (result.code === 0 && result.stdout) {
     // Returns something like "origin/main", extract just "main"
-    const branch = result.stdout.trim().replace("origin/", "");
+    const branch = result.stdout.trim().replace(/^origin\//, "");
     return { success: true, branch };
   }
 
-  // Fallback: check if main or master exists
+  // Fallback: check if develop, main, or master exists
   const branchResult = await runGit(projectPath, ["branch", "-r"]);
   if (branchResult.code === 0) {
     const branches = branchResult.stdout;
+    if (branches.includes("origin/develop")) {
+      return { success: true, branch: "develop" };
+    }
     if (branches.includes("origin/main")) {
       return { success: true, branch: "main" };
     }
@@ -3853,13 +3880,60 @@ ipcMain.handle("git:defaultBranch", async (_, projectPath: string) => {
 // Get staged diff
 ipcMain.handle(
   "git:diff",
-  async (_, projectPath: string, staged: boolean = true) => {
-    const args = staged ? ["diff", "--cached"] : ["diff"];
+  async (_, projectPath: string, staged: boolean = true, baseBranch?: string) => {
+    let args: string[];
+    if (baseBranch) {
+      // Diff against a specific branch
+      args = ["diff", `${baseBranch}...HEAD`];
+    } else {
+      args = staged ? ["diff", "--cached"] : ["diff"];
+    }
     const result = await runGit(projectPath, args);
     return {
       success: result.code === 0,
       diff: result.stdout,
       error: result.code !== 0 ? result.stderr : undefined,
+    };
+  }
+);
+
+// Get merge base branch - finds which branch HEAD was forked from
+ipcMain.handle(
+  "git:mergeBase",
+  async (_, projectPath: string, candidateBranches: string[]) => {
+    // Simple approach: find the branch with the fewest commits between it and HEAD
+    // This means it's the most recent ancestor (the branch you forked from)
+    let bestBranch = candidateBranches[0] || "main";
+    let bestDistance = Infinity;
+
+    for (const branch of candidateBranches) {
+      try {
+        // Count commits from branch to HEAD
+        // Fewer commits = more recent fork = more likely the parent branch
+        const countResult = await runGit(projectPath, [
+          "rev-list",
+          "--count",
+          `${branch}..HEAD`,
+        ]);
+
+        if (countResult.code !== 0) continue;
+
+        const distance = parseInt(countResult.stdout.trim(), 10);
+
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestBranch = branch;
+        }
+      } catch {
+        // Skip this branch if there's an error
+        continue;
+      }
+    }
+
+    return {
+      success: true,
+      branch: bestBranch,
+      distance: bestDistance === Infinity ? -1 : bestDistance,
     };
   }
 );

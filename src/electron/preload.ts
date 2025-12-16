@@ -438,12 +438,14 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("git:defaultBranch", projectPath),
     protectedBranches: (projectPath: string) =>
       ipcRenderer.invoke("git:protectedBranches", projectPath),
-    diff: (projectPath: string, staged?: boolean) =>
-      ipcRenderer.invoke("git:diff", projectPath, staged),
+    diff: (projectPath: string, staged?: boolean, baseBranch?: string) =>
+      ipcRenderer.invoke("git:diff", projectPath, staged, baseBranch),
     diffFiles: (projectPath: string, baseBranch?: string) =>
       ipcRenderer.invoke("git:diffFiles", projectPath, baseBranch),
     prDiffFiles: (projectPath: string) =>
       ipcRenderer.invoke("git:pr:diffFiles", projectPath),
+    mergeBase: (projectPath: string, branches: string[]) =>
+      ipcRenderer.invoke("git:mergeBase", projectPath, branches),
   },
   review: (
     projectPath: string,
