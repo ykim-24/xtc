@@ -15,12 +15,14 @@ import { GitPanel } from '@/components/git';
 import { LinearPanel } from '@/components/linear/LinearPanel';
 import { MinimizedSessionIndicators } from '@/components/linear/MinimizedSessionIndicators';
 import { WorktreeGraph } from '@/components/worktrees';
+import { EditReview } from '@/components/edit-review';
 import { useSettingsStore, useTestStore, useEditsStore } from '@/stores';
 
 export function MainLayout() {
   const { explorerVisible, chatVisible, terminalVisible, debugVisible } = useSettingsStore();
   const { mode, selectedFramework, setMode, setPreviousMode } = useTestStore();
-  const { addPendingEdit, updatePendingEdit, clearPendingEdits } = useEditsStore();
+  const { pendingEdits, addPendingEdit, updatePendingEdit, clearPendingEdits } = useEditsStore();
+  const hasPendingEdits = pendingEdits.length > 0;
 
   // Listen for pending edits from backend (Claude's file changes detected via git)
   useEffect(() => {
@@ -82,7 +84,10 @@ export function MainLayout() {
             <div className="h-full relative">
               {/* Home mode content */}
               <div className={`h-full ${isHomeMode ? '' : 'hidden'}`}>
-                {terminalVisible ? (
+                {hasPendingEdits ? (
+                  /* Show EditReview when there are pending edits */
+                  <EditReview />
+                ) : terminalVisible ? (
                   <PanelGroup direction="vertical" autoSaveId="editor-terminal">
                     <Panel id="editor" defaultSize={70} minSize={30}>
                       <EditorArea />

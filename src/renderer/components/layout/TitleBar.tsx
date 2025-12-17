@@ -3,7 +3,7 @@ import { Minus, Square, X } from 'lucide-react';
 import { APP_NAME } from '@shared/constants';
 import { useSettingsStore, useProjectStore } from '@/stores';
 import { SettingsModal } from '@/components/settings';
-import { FileSearchModal } from '@/components/search';
+import { FileSearchModal, ContentSearchModal } from '@/components/search';
 
 // Detect platform for shortcut display
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -27,6 +27,7 @@ export function TitleBar() {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fileSearchOpen, setFileSearchOpen] = useState(false);
+  const [contentSearchOpen, setContentSearchOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -269,6 +270,15 @@ export function TitleBar() {
         return;
       }
 
+      // Search in Files: Cmd/Ctrl + Shift + F
+      if (isMod && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        if (projectPath) {
+          setContentSearchOpen(true);
+        }
+        return;
+      }
+
       // Toggle Debug Panel: Cmd/Ctrl + 0
       if (isMod && e.key === '0') {
         e.preventDefault();
@@ -362,6 +372,9 @@ export function TitleBar() {
 
       {/* File Search Modal */}
       <FileSearchModal isOpen={fileSearchOpen} onClose={() => setFileSearchOpen(false)} />
+
+      {/* Content Search Modal */}
+      <ContentSearchModal isOpen={contentSearchOpen} onClose={() => setContentSearchOpen(false)} />
     </div>
   );
 }

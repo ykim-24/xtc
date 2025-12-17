@@ -67,6 +67,11 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.invoke("file:write", path, content),
   readDir: (path: string) => ipcRenderer.invoke("file:readDir", path),
   listAllFiles: (path: string) => ipcRenderer.invoke("file:listAllFiles", path),
+  searchContent: (
+    path: string,
+    query: string,
+    options?: { caseSensitive?: boolean; maxResults?: number }
+  ) => ipcRenderer.invoke("file:searchContent", path, query, options),
   deleteFile: (path: string) => ipcRenderer.invoke("file:delete", path),
   renameFile: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke("file:rename", oldPath, newPath),
@@ -115,6 +120,8 @@ contextBridge.exposeInMainWorld("electron", {
     checkInstalled: () => ipcRenderer.invoke("claude:checkInstalled"),
     clearConversation: (projectPath: string | null) =>
       ipcRenderer.invoke("claude:clearConversation", projectPath),
+    stop: (projectPath: string | null) =>
+      ipcRenderer.invoke("claude:stop", projectPath),
     onStream: (callback: (chunk: string) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, chunk: string) =>
         callback(chunk);
@@ -388,6 +395,8 @@ contextBridge.exposeInMainWorld("electron", {
           worktreePath,
           sessionId
         ),
+      listTokenUsage: (worktreePath: string) =>
+        ipcRenderer.invoke("git:worktree:listTokenUsage", worktreePath),
     },
     pr: {
       create: (

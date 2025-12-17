@@ -22,6 +22,16 @@
   }
 }
 
+/* Dash traveling animation for larger elements (worktree nodes) */
+@keyframes dash-travel-lg {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -496;
+  }
+}
+
 /* Base styles */
 * {
   box-sizing: border-box;
@@ -188,70 +198,7 @@ select, option, input, button, textarea {
 
 /* Worktree Node Animated Borders */
 
-/* Spinning yellow border for planning state */
-.worktree-node-planning {
-  position: relative;
-  background: transparent;
-}
-
-.worktree-node-planning::before {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 0.5rem;
-  background: conic-gradient(from var(--angle, 0deg), #eab308, #facc15, #fde047, #facc15, #eab308);
-  animation: worktree-border-spin 2s linear infinite;
-  z-index: -1;
-}
-
-/* Spinning blue border for running state */
-.worktree-node-running {
-  position: relative;
-  background: transparent;
-}
-
-.worktree-node-running::before {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 0.5rem;
-  background: conic-gradient(from var(--angle, 0deg), #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6);
-  animation: worktree-border-spin 2s linear infinite;
-  z-index: -1;
-}
-
-@keyframes worktree-border-spin {
-  to {
-    --angle: 360deg;
-  }
-}
-
-/* Use @property for smooth conic gradient animation */
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-
-/* Fallback spinning animation for browsers without @property support */
-@supports not (background: conic-gradient(from var(--angle), red, blue)) {
-  .worktree-node-planning::before {
-    background: linear-gradient(90deg, #eab308, #facc15, #eab308);
-    background-size: 200% 100%;
-    animation: worktree-gradient-shift 1s linear infinite;
-  }
-
-  .worktree-node-running::before {
-    background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
-    background-size: 200% 100%;
-    animation: worktree-gradient-shift 1s linear infinite;
-  }
-
-  @keyframes worktree-gradient-shift {
-    from { background-position: 0% 50%; }
-    to { background-position: 200% 50%; }
-  }
-}
+/* Worktree node borders - planning/running now use SVG animation in component */
 
 /* Solid green border for success */
 .worktree-node-success {
@@ -263,6 +210,12 @@ select, option, input, button, textarea {
 .worktree-node-error {
   border: 2px solid #ef4444;
   box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+/* Solid orange border for stopped */
+.worktree-node-stopped {
+  border: 2px solid #f97316;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.4);
 }
 
 /* Default idle border */

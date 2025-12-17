@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { X, GitBranch, ExternalLink, Play, CheckCircle, XCircle, Loader, Trash2 } from 'lucide-react';
+import { X, GitBranch, ExternalLink, Play, CheckCircle, XCircle, Loader, Trash2, Square, StopCircle } from 'lucide-react';
 import { useWorktreeStore } from '@/stores/worktreeStore';
 import { useProjectStore, useStartWorkStore } from '@/stores';
 import { formatClaudeStream } from '@/services/claudeStreamFormatter';
@@ -19,7 +19,7 @@ interface WorktreeNodePanelProps {
 
 export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNodePanelProps) {
   const { projectPath, setProjectPath } = useProjectStore();
-  const { removeSession } = useWorktreeStore();
+  const { removeSession, setSessionStatus } = useWorktreeStore();
   // Subscribe specifically to this worktree's session for proper reactivity
   const session = useWorktreeStore((state) => state.sessions[worktree.path]);
   const status = useWorktreeStore((state) => state.getSessionStatus(worktree.path));
@@ -81,6 +81,13 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
 
   const handleRevealInFinder = async () => {
     await window.electron?.revealInFinder?.(worktree.path);
+  };
+
+  const handleStop = async () => {
+    // Stop the Claude process
+    await window.electron?.claude.stop(worktree.path);
+    // Set status to stopped instead of removing the session
+    setSessionStatus(worktree.path, 'stopped');
   };
 
   const handleDelete = async () => {
@@ -160,8 +167,22 @@ export function WorktreeNodePanel({ worktree, onClose, onDeleted }: WorktreeNode
                 <XCircle className="w-3 h-3" /> Error
               </span>
             )}
+            {status === 'stopped' && (
+              <span className="flex items-center gap-1 text-[10px] text-orange-400">
+                <StopCircle className="w-3 h-3" /> Stopped
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Stop button - show when running or planning */}
+            {(status === 'running' || status === 'planning' || planningSession?.isProcessing) && (
+              <button
+                onClick={handleStop}
+                className="text-xs font-mono text-text-muted hover:text-orange-400 transition-colors"
+              >
+                [ stop ]
+              </button>
+            )}
             {!worktree.isCurrent && (
               <button
                 onClick={handleSwitchWorktree}

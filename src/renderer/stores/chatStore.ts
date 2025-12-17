@@ -8,6 +8,12 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+export interface QueuedMessage {
+  id: string;
+  content: string;
+  fileMappings: Map<string, string>;
+}
+
 interface ChatState {
   messages: ChatMessage[];
   isLoading: boolean;
@@ -17,6 +23,7 @@ interface ChatState {
   resultStatus: 'ok' | 'error' | null;
   lastPrompt: string | null;
   currentActivity: string | null;
+  messageQueue: QueuedMessage[];
 
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
   updateMessage: (id: string, content: string) => void;
@@ -30,6 +37,9 @@ interface ChatState {
   setResultStatus: (status: 'ok' | 'error' | null) => void;
   setLastPrompt: (prompt: string) => void;
   setCurrentActivity: (activity: string | null) => void;
+  addToQueue: (content: string, fileMappings: Map<string, string>) => void;
+  getNextFromQueue: () => QueuedMessage | undefined;
+  clearQueue: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -41,6 +51,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resultStatus: null,
   lastPrompt: null,
   currentActivity: null,
+  messageQueue: [],
 
   addMessage: (message) => {
     const id = crypto.randomUUID();
@@ -95,4 +106,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setLastPrompt: (lastPrompt) => set({ lastPrompt }),
 
   setCurrentActivity: (currentActivity) => set({ currentActivity }),
+
+  addToQueue: (content, fileMappings) => {
+    const id = crypto.randomUUID();
+    set((state) => ({
+      messageQueue: [...state.messageQueue, { id, content, fileMappings }],
+    }));
+  },
+
+  getNextFromQueue: () => {
+    const state = get();
+    if (state.messageQueue.length === 0) return undefined;
+    const [next, ...rest] = state.messageQueue;
+    set({ messageQueue: rest });
+    return next;
+  },
+
+  clearQueue: () => set({ messageQueue: [] }),
 }));

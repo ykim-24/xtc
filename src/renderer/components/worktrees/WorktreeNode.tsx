@@ -1,6 +1,6 @@
 import { GitBranch } from "lucide-react";
 
-export type WorktreeStatus = "idle" | "planning" | "running" | "success" | "error";
+export type WorktreeStatus = "idle" | "planning" | "running" | "success" | "error" | "stopped";
 
 interface WorktreeNodeProps {
   id: string;
@@ -26,6 +26,10 @@ export function WorktreeNode({
   onClick,
   linearTicket,
 }: WorktreeNodeProps) {
+  const isAnimating = status === "planning" || status === "running";
+  const strokeColor = status === "planning" ? "#eab308" : "#3b82f6";
+  const bgStrokeColor = status === "planning" ? "#422006" : "#1e3a5f";
+
   return (
     <div
       onClick={onClick}
@@ -38,18 +42,49 @@ export function WorktreeNode({
       <div
         className={`
         relative w-32 h-32 rounded-lg
-        ${status === "planning" ? "worktree-node-planning" : ""}
-        ${status === "running" ? "worktree-node-running" : ""}
         ${status === "success" ? "worktree-node-success" : ""}
         ${status === "error" ? "worktree-node-error" : ""}
+        ${status === "stopped" ? "worktree-node-stopped" : ""}
         ${status === "idle" ? "worktree-node-idle" : ""}
-        ${
-          isSelected
-            ? "ring-2 ring-accent-primary ring-offset-2 ring-offset-bg-primary"
-            : ""
-        }
+        ${!isAnimating && isSelected ? "ring-2 ring-accent-primary ring-offset-2 ring-offset-bg-primary" : ""}
       `}
       >
+        {/* SVG traveling border for planning/running states */}
+        {isAnimating && (
+          <svg
+            className="absolute inset-0 w-full h-full"
+            viewBox="0 0 128 128"
+          >
+            {/* Background border */}
+            <rect
+              x="2"
+              y="2"
+              width="124"
+              height="124"
+              rx="8"
+              fill="none"
+              stroke={bgStrokeColor}
+              strokeWidth="4"
+            />
+            {/* Animated traveling line - perimeter is ~496 (124*4) */}
+            <rect
+              x="2"
+              y="2"
+              width="124"
+              height="124"
+              rx="8"
+              fill="none"
+              stroke={strokeColor}
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeDasharray="80 416"
+              style={{
+                animation: 'dash-travel-lg 1s linear infinite',
+              }}
+            />
+          </svg>
+        )}
+
         {/* Inner content */}
         <div
           className={`
@@ -87,55 +122,8 @@ export function WorktreeNode({
   );
 }
 
-/* CSS for animated borders - add to your global styles or use styled-components */
+/* CSS for static borders - planning/running now use SVG animation */
 export const worktreeNodeStyles = `
-  /* Spinning yellow border for planning state */
-  .worktree-node-planning {
-    background: linear-gradient(90deg, #eab308, #facc15, #eab308);
-    background-size: 200% 100%;
-    animation: worktree-spin 1.5s linear infinite;
-  }
-
-  .worktree-node-planning::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 0.5rem;
-    padding: 2px;
-    background: conic-gradient(from 0deg, #eab308, #facc15, #fde047, #facc15, #eab308);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    animation: worktree-border-spin 2s linear infinite;
-  }
-
-  /* Spinning blue border for running state */
-  .worktree-node-running {
-    background: linear-gradient(90deg, #3b82f6, #60a5fa, #3b82f6);
-    background-size: 200% 100%;
-    animation: worktree-spin 1.5s linear infinite;
-  }
-
-  .worktree-node-running::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 0.5rem;
-    padding: 2px;
-    background: conic-gradient(from 0deg, #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    animation: worktree-border-spin 2s linear infinite;
-  }
-
-  @keyframes worktree-border-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
   /* Solid green border for success */
   .worktree-node-success {
     border: 2px solid #22c55e;
@@ -146,6 +134,12 @@ export const worktreeNodeStyles = `
   .worktree-node-error {
     border: 2px solid #ef4444;
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+  }
+
+  /* Solid orange border for stopped */
+  .worktree-node-stopped {
+    border: 2px solid #f97316;
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.3);
   }
 
   /* Default idle border */

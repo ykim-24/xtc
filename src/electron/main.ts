@@ -234,7 +234,7 @@ app.whenReady().then(() => {
 
     // Handle restart request from renderer
     ipcMain.on("update:restart", () => {
-      autoUpdater.quitAndInstall();
+      autoUpdater.quitAndInstall(false, true); // isSilent=false, isForceRunAfter=true
     });
 
     autoUpdater.on("error", (err: Error) => {
@@ -582,6 +582,125 @@ ipcMain.handle("file:listAllFiles", async (_, dirPath: string) => {
     return { success: false, error: String(error) };
   }
 });
+
+// Search file contents using grep/ripgrep-like functionality
+ipcMain.handle(
+  "file:searchContent",
+  async (
+    _,
+    dirPath: string,
+    query: string,
+    options?: { caseSensitive?: boolean; maxResults?: number }
+  ) => {
+    const caseSensitive = options?.caseSensitive ?? false;
+    const maxResults = options?.maxResults ?? 100;
+
+    interface SearchResult {
+      filePath: string;
+      fileName: string;
+      lineNumber: number;
+      lineContent: string;
+      matchStart: number;
+      matchEnd: number;
+    }
+
+    const results: SearchResult[] = [];
+    const searchRegex = new RegExp(
+      query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), // Escape special regex chars
+      caseSensitive ? "g" : "gi"
+    );
+
+    // Directories to skip (same as listAllFiles)
+    const SKIP_DIRS = new Set([
+      "node_modules", ".git", "dist", "build", ".next", ".nuxt",
+      "coverage", ".nyc_output", ".cache", ".parcel-cache",
+      "__pycache__", ".pytest_cache", "venv", ".venv", "env",
+      ".idea", ".vscode", ".DS_Store", "vendor", "target",
+      ".turbo", ".vercel", ".output", "out", ".xtc"
+    ]);
+
+    // File extensions to search (text-based files)
+    const SEARCHABLE_EXTENSIONS = new Set([
+      ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+      ".py", ".rb", ".go", ".rs", ".java", ".kt", ".scala",
+      ".c", ".cpp", ".h", ".hpp", ".cs", ".swift",
+      ".vue", ".svelte", ".astro",
+      ".html", ".htm", ".css", ".scss", ".sass", ".less",
+      ".json", ".yaml", ".yml", ".toml", ".xml",
+      ".md", ".mdx", ".txt", ".rst",
+      ".sql", ".graphql", ".gql",
+      ".sh", ".bash", ".zsh", ".fish",
+      ".env", ".env.local", ".env.example",
+      ".gitignore", ".dockerignore",
+      "Dockerfile", "Makefile", "Procfile"
+    ]);
+
+    async function searchFile(filePath: string) {
+      if (results.length >= maxResults) return;
+
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const lines = content.split("\n");
+
+        for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+          const line = lines[i];
+          const match = searchRegex.exec(line);
+          if (match) {
+            results.push({
+              filePath,
+              fileName: path.basename(filePath),
+              lineNumber: i + 1,
+              lineContent: line.slice(0, 200), // Truncate long lines
+              matchStart: match.index,
+              matchEnd: match.index + match[0].length,
+            });
+            // Reset regex lastIndex for next search
+            searchRegex.lastIndex = 0;
+          }
+        }
+      } catch {
+        // Skip files that can't be read (binary, permissions, etc.)
+      }
+    }
+
+    async function walkDir(currentPath: string) {
+      if (results.length >= maxResults) return;
+
+      try {
+        const entries = await fs.readdir(currentPath, { withFileTypes: true });
+
+        for (const entry of entries) {
+          if (results.length >= maxResults) break;
+
+          const fullPath = path.join(currentPath, entry.name);
+
+          if (entry.isDirectory()) {
+            if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+              await walkDir(fullPath);
+            }
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            // Search files with known text extensions or no extension (like Makefile)
+            if (SEARCHABLE_EXTENSIONS.has(ext) || SEARCHABLE_EXTENSIONS.has(entry.name)) {
+              await searchFile(fullPath);
+            }
+          }
+        }
+      } catch {
+        // Skip directories we can't read
+      }
+    }
+
+    try {
+      await walkDir(dirPath);
+      fileLogger.success(`Search completed`, { query, resultCount: results.length });
+      return { success: true, results };
+    } catch (error) {
+      fileLogger.error(`Search failed`, error);
+      return { success: false, error: String(error), results: [] };
+    }
+  }
+);
 
 ipcMain.handle("file:delete", async (_, filePath: string) => {
   const fileName = path.basename(filePath);
@@ -1677,6 +1796,12 @@ async function detectChangesAndCreateEdits(
 // Resets when app restarts, so we don't pick up stale conversations from Cursor/terminal/etc
 const appSessionConversations: Set<string> = new Set();
 
+// Track active Claude processes for killing/stopping
+import type { ChildProcess } from "child_process";
+const activeClaudeProcesses: Map<string, ChildProcess> = new Map();
+// Track processes that were intentionally stopped (to avoid showing error on null exit code)
+const intentionallyStoppedProcesses: Set<string> = new Set();
+
 // Power save blocker - prevents system sleep while Claude processes are running
 let powerSaveBlockerId: number | null = null;
 let activeClaudeProcessCount = 0;
@@ -1781,6 +1906,9 @@ ipcMain.handle(
         shell: true,
         cwd: projectPath || undefined,
       });
+
+      // Track this process for potential stopping
+      activeClaudeProcesses.set(projectKey, claude);
 
       let responseText = "";
       let stdinWritten = false;
@@ -1962,12 +2090,24 @@ ipcMain.handle(
 
       claude.on("error", (err) => {
         claudeLogger.error("Spawn error", err);
+        activeClaudeProcesses.delete(projectKey);
         releasePowerSaveBlocker();
         resolve({ success: false, error: err.message });
       });
 
       claude.on("close", async (code) => {
+        activeClaudeProcesses.delete(projectKey);
         releasePowerSaveBlocker();
+
+        // Check if this process was intentionally stopped
+        const wasStopped = intentionallyStoppedProcesses.has(projectKey);
+        if (wasStopped) {
+          intentionallyStoppedProcesses.delete(projectKey);
+          claudeLogger.info("Claude process was intentionally stopped", { project: projectKey });
+          resolve({ success: true, response: responseText.trim(), stopped: true });
+          return;
+        }
+
         claudeLogger.end("Claude response", {
           code,
           responseLength: responseText.length,
@@ -2078,6 +2218,37 @@ ipcMain.handle(
     return { success: true };
   }
 );
+
+// Stop/kill running Claude process
+ipcMain.handle("claude:stop", async (_, projectPath: string | null) => {
+  const projectKey = projectPath || "__global__";
+  const process = activeClaudeProcesses.get(projectKey);
+
+  if (process) {
+    claudeLogger.info("Stopping Claude process", { project: projectKey });
+    try {
+      // Mark as intentionally stopped so the close handler doesn't show an error
+      intentionallyStoppedProcesses.add(projectKey);
+      // Kill the process and its children (shell spawns a child process)
+      process.kill("SIGTERM");
+      // If SIGTERM doesn't work after 1 second, force kill
+      setTimeout(() => {
+        if (!process.killed) {
+          process.kill("SIGKILL");
+        }
+      }, 1000);
+      activeClaudeProcesses.delete(projectKey);
+      // Also clear the conversation state
+      appSessionConversations.delete(projectKey);
+      return { success: true, stopped: true };
+    } catch (err) {
+      claudeLogger.error("Failed to stop Claude process", err);
+      return { success: false, error: String(err) };
+    }
+  }
+
+  return { success: true, stopped: false, message: "No active process found" };
+});
 
 // Edit approval handlers
 // Now edits are managed on the client side, so we just need to write/reject files
@@ -5510,6 +5681,40 @@ ipcMain.handle(
   }
 );
 
+// List all token usage files in a worktree (for restoring after refresh)
+ipcMain.handle(
+  "git:worktree:listTokenUsage",
+  async (_, worktreePath: string) => {
+    const xtcDir = path.join(worktreePath, ".xtc");
+
+    try {
+      const files = await fs.readdir(xtcDir);
+      const usageFiles = files.filter(
+        (f) => f.startsWith("token-usage-") && f.endsWith(".json")
+      );
+
+      const usages: Array<{ sessionId: string; usage: TokenUsage }> = [];
+
+      for (const file of usageFiles) {
+        try {
+          const content = await fs.readFile(path.join(xtcDir, file), "utf-8");
+          const usage = JSON.parse(content) as TokenUsage;
+          // Extract sessionId from filename: token-usage-{sessionId}.json
+          const sessionId = file.replace("token-usage-", "").replace(".json", "");
+          usages.push({ sessionId, usage });
+        } catch {
+          // Skip invalid files
+        }
+      }
+
+      return { success: true, usages };
+    } catch {
+      // Directory may not exist
+      return { success: true, usages: [] };
+    }
+  }
+);
+
 // Review file with Claude - dedicated fresh conversation for code review
 ipcMain.handle(
   "claude:review",
@@ -5582,7 +5787,7 @@ Review this code and respond with a JSON object (no markdown, just raw JSON):
       "endLine": <ending line number, same as startLine if single line>,
       "message": "<brief description>",
       "rule": "<which rule/standard this violates, if any>",
-      "suggestedFix": "<code snippet showing how to fix this issue, or null if not applicable>"
+      "suggestedFix": "<REQUIRED: actual code snippet showing the fix - include enough context (surrounding lines) to make it clear where and what to change. Format as the exact code that should replace the problematic code>"
     }
   ],
   "highlights": [
@@ -5605,7 +5810,9 @@ IMPORTANT CONSTRAINT: There is a limit of 50 total comments (issues + highlights
 - For highlights: Be VERY selective - only highlight truly exceptional code (clever algorithms, elegant solutions, significant improvements). Most files should have 0-1 highlights max. Don't highlight routine good practices.
 - Aim for 2-5 comments per file maximum to stay within budget.
 
-IMPORTANT: Use the line numbers shown on the LEFT side of the diff above. These are the actual file line numbers.`;
+IMPORTANT: Use the line numbers shown on the LEFT side of the diff above. These are the actual file line numbers.
+
+IMPORTANT: Always provide suggestedFix for every issue. The suggestedFix should be actual code that can replace the problematic code. Include 1-2 lines of surrounding context so the user knows exactly where to apply the fix.`;
 
       // Spawn fresh Claude session (no --continue) for isolated review
       const args = [

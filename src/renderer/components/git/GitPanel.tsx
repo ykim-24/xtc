@@ -264,22 +264,34 @@ export function GitPanel() {
         return;
       }
 
-      // Check if this projectPath has a worktree session
+      // First, check if this projectPath has an active worktree session
       const session = useWorktreeStore.getState().getSession(projectPath);
       if (session?.linearTicket?.identifier) {
         try {
           const result = await window.electron?.git.worktree.readTokenUsage(projectPath, session.linearTicket.identifier);
           if (result?.success && result.usage) {
             setTokenUsage(result.usage);
-          } else {
-            setTokenUsage(null);
+            return;
           }
         } catch {
-          setTokenUsage(null);
+          // Continue to fallback
         }
-      } else {
-        setTokenUsage(null);
       }
+
+      // Fallback: scan for existing token usage files (for after refresh)
+      try {
+        const result = await window.electron?.git.worktree.listTokenUsage(projectPath);
+        if (result?.success && result.usages?.length > 0) {
+          // Use the most recent usage (by lastUpdated)
+          const sorted = result.usages.sort((a: { usage: { lastUpdated: number } }, b: { usage: { lastUpdated: number } }) => b.usage.lastUpdated - a.usage.lastUpdated);
+          setTokenUsage(sorted[0].usage);
+          return;
+        }
+      } catch {
+        // Ignore errors
+      }
+
+      setTokenUsage(null);
     };
     loadTokenUsage();
 

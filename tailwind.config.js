@@ -51,6 +51,9 @@ export default {
         button: 'var(--radius-button)',
         input: 'var(--radius-input)',
       },
+      animation: {
+        'spin-slow': 'spin 2s linear infinite',
+      },
     },
   },
   plugins: [],

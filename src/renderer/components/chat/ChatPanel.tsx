@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { useEffect, useCallback, useRef } from 'react';
+import { AlertCircle, Square } from 'lucide-react';
 import { Panel } from '@/components/ui';
 import { ChatInput } from './ChatInput';
 import { PixelCube } from './PixelCube';
@@ -21,7 +21,14 @@ export function ChatPanel() {
     setResultStatus,
     setLastPrompt,
     setCurrentActivity,
+    messageQueue,
+    addToQueue,
+    getNextFromQueue,
+    clearQueue,
   } = useChatStore();
+
+  // Track if we're processing the queue to avoid duplicate calls
+  const isProcessingQueueRef = useRef(false);
 
   const { projectPath, openFiles, activeFilePath } = useProjectStore();
   const { contextFiles, addContextFile } = useContextStore();
@@ -42,30 +49,33 @@ export function ChatPanel() {
     checkClaude();
   }, [setClaudeInstalled]);
 
-  // Set up streaming listener
+  // Set up streaming listener - IMPORTANT: No dependencies to avoid re-subscription on re-renders
+  // This ensures we don't lose streaming chunks when switching tabs
   useEffect(() => {
     if (!window.electron?.claude) return;
 
     const unsubscribe = window.electron.claude.onStream((chunk) => {
-      const currentStreamingId = useChatStore.getState().streamingMessageId;
+      const state = useChatStore.getState();
+      const currentStreamingId = state.streamingMessageId;
       if (currentStreamingId) {
-        appendToMessage(currentStreamingId, chunk);
+        // Use getState() to get latest appendToMessage without dependency
+        state.appendToMessage(currentStreamingId, chunk);
       }
     });
 
     return unsubscribe;
-  }, [appendToMessage]);
+  }, []); // Empty dependency array - subscribe once and never re-subscribe
 
-  // Set up activity listener
+  // Set up activity listener - IMPORTANT: No dependencies to avoid re-subscription
   useEffect(() => {
     if (!window.electron?.claude) return;
 
     const unsubscribe = window.electron.claude.onActivity((activity) => {
-      setCurrentActivity(activity);
+      useChatStore.getState().setCurrentActivity(activity);
     });
 
     return unsubscribe;
-  }, [setCurrentActivity]);
+  }, []); // Empty dependency array - subscribe once
 
   // Set up token usage listener for worktree sessions
   useEffect(() => {
@@ -89,7 +99,8 @@ export function ChatPanel() {
     return unsubscribe;
   }, []);
 
-  const handleSend = async (content: string, fileMappings: Map<string, string>) => {
+  // Core send logic - extracted so it can be called for queued messages
+  const doSend = useCallback(async (content: string, fileMappings: Map<string, string>) => {
     // Set loading immediately
     setLoading(true);
     setError(null);
@@ -221,7 +232,62 @@ export function ChatPanel() {
         messages: state.messages.filter((m) => m.id !== assistantMessageId),
       }));
     }
-  };
+
+    // Process any queued messages
+    const nextMessage = getNextFromQueue();
+    if (nextMessage) {
+      // Small delay before processing next message
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await doSend(nextMessage.content, nextMessage.fileMappings);
+    }
+  }, [projectPath, openFiles, activeFilePath, contextFiles, autoApproveEdits, mode,
+      addMessage, addContextFile, setLoading, setError, setCurrentActivity,
+      setStreamingMessageId, setLastPrompt, setResultStatus, finishStreaming,
+      setPendingEdits, setPreviousMode, setMode, getNextFromQueue]);
+
+  // Handle send - queues if Claude is busy, otherwise sends immediately
+  const handleSend = useCallback((content: string, fileMappings: Map<string, string>) => {
+    if (isLoading) {
+      // Queue the message for later
+      addToQueue(content, fileMappings);
+    } else {
+      // Send immediately
+      doSend(content, fileMappings);
+    }
+  }, [isLoading, addToQueue, doSend]);
+
+  // Handle stop - interrupt Claude's current response
+  const handleStop = useCallback(async () => {
+    if (!isLoading) return;
+
+    try {
+      // Stop the Claude process
+      await window.electron?.claude.stop(projectPath);
+
+      // Clear the streaming state
+      const currentStreamingId = useChatStore.getState().streamingMessageId;
+      if (currentStreamingId) {
+        // Mark the message as interrupted
+        useChatStore.setState((state) => ({
+          messages: state.messages.map((m) =>
+            m.id === currentStreamingId
+              ? { ...m, content: m.content + '\n\n*[Response interrupted]*', isStreaming: false }
+              : m
+          ),
+          streamingMessageId: null,
+          isLoading: false,
+        }));
+      }
+
+      // Clear the activity
+      setCurrentActivity(null);
+
+      // Clear the queue as well (user interrupted, probably wants to start fresh)
+      clearQueue();
+    } catch (err) {
+      console.error('Failed to stop Claude:', err);
+    }
+  }, [isLoading, projectPath, setCurrentActivity, clearQueue]);
 
   // Show error if Claude is not installed
   if (claudeInstalled === false) {
@@ -263,8 +329,37 @@ export function ChatPanel() {
           <PixelCube />
         </div>
 
-        {/* Input */}
-        <ChatInput onSend={handleSend} disabled={isLoading} />
+        {/* Status bar - shows when Claude is loading or messages are queued */}
+        {(isLoading || messageQueue.length > 0) && (
+          <div className="px-3 py-1.5 bg-bg-secondary border-t border-border-primary text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2 text-text-muted">
+              {isLoading && (
+                <>
+                  <span className="text-cyan-400 animate-pulse">●</span>
+                  <span>Claude is responding...</span>
+                </>
+              )}
+              {messageQueue.length > 0 && (
+                <span className="text-accent-primary">
+                  {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
+                </span>
+              )}
+            </div>
+            {isLoading && (
+              <button
+                onClick={handleStop}
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+                title="Stop response"
+              >
+                <Square className="w-3 h-3" />
+                <span>Stop</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Input - always enabled, will queue if Claude is busy */}
+        <ChatInput onSend={handleSend} disabled={false} />
       </div>
     </Panel>
   );

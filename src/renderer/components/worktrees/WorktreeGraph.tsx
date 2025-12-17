@@ -233,15 +233,32 @@ export function WorktreeGraph() {
     };
   }, [handleMouseMove, handleMouseUp]);
 
-  // Attach wheel listener to container
+  // Attach wheel listener to container using callback ref pattern
+  // This ensures the listener is attached when the element is available
+  const wheelListenerRef = useRef<HTMLDivElement | null>(null);
+
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    // Remove listener from previous node
+    if (wheelListenerRef.current) {
+      wheelListenerRef.current.removeEventListener('wheel', handleWheel);
+    }
+
+    // Update refs
+    containerRef.current = node;
+    wheelListenerRef.current = node;
+
+    // Add listener to new node
+    if (node) {
+      node.addEventListener('wheel', handleWheel, { passive: false });
+    }
+  }, [handleWheel]);
+
+  // Cleanup on unmount
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    container.addEventListener('wheel', handleWheel, { passive: false });
-
     return () => {
-      container.removeEventListener('wheel', handleWheel);
+      if (wheelListenerRef.current) {
+        wheelListenerRef.current.removeEventListener('wheel', handleWheel);
+      }
     };
   }, [handleWheel]);
 
@@ -312,7 +329,7 @@ export function WorktreeGraph() {
 
       {/* Graph area */}
       <div
-        ref={containerRef}
+        ref={setContainerRef}
         className={`flex-1 overflow-hidden ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
         onMouseDown={handleMouseDown}
       >

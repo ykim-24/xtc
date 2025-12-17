@@ -101,12 +101,12 @@ export function UpdateNotification() {
 
           {/* Changelog */}
           {updateInfo.releaseNotes && (
-            <div className="mb-6 max-h-32 overflow-y-auto">
+            <div className="mb-6">
               <p className="text-xs text-text-muted mb-2 text-center">
                 What's new:
               </p>
               <div
-                className="text-sm text-text-secondary bg-black/20 rounded-lg p-3 text-left"
+                className="text-sm text-text-secondary bg-black/20 rounded-lg p-3 text-left max-h-48 overflow-y-auto"
                 style={{
                   fontFamily: "SF Pro Text, Inter, system-ui, sans-serif",
                 }}

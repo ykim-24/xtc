@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/Modal";
-import { FolderOpen, ChevronRight, Check, X, Minus } from "lucide-react";
+import { FolderOpen, ChevronRight, Check, X, Minus, Square } from "lucide-react";
 import { PixelGit } from "@/components/feature-sidebar/PixelIcons";
 import { formatClaudeStream } from "@/services/claudeStreamFormatter";
 import { useWorktreeStore } from "@/stores/worktreeStore";
@@ -412,6 +412,27 @@ export function StartWorkPanel({
     }
   }, [currentSessionId, currentStep, handleMinimize, onClose]);
 
+  // Handle stop session - kill Claude process and clean up
+  const handleStop = useCallback(async () => {
+    if (!currentSessionId) return;
+
+    // Stop any running Claude process
+    if (worktreePath) {
+      await window.electron?.claude.stop(worktreePath);
+    }
+
+    // Remove the session from startWorkStore
+    store.removeSession(currentSessionId);
+
+    // Also update worktreeStore if there's a session there
+    if (worktreePath) {
+      worktreeStore.setSessionStatus(worktreePath, "stopped");
+    }
+
+    // Close the modal
+    onClose();
+  }, [currentSessionId, worktreePath, store, worktreeStore, onClose]);
+
   // Test flow to preview the UI
   const runTestFlow = async () => {
     if (!currentSessionId) return;
@@ -727,6 +748,23 @@ export function StartWorkPanel({
           },
         ]);
         store.setWorktreePath(currentSessionId, existingWorktree.path);
+
+        // Start session in worktree store with "planning" status
+        const ticketInfo = {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          description: issue.description,
+        };
+        worktreeStore.startSession(existingWorktree.path, ticketInfo);
+        worktreeStore.setSessionStatus(existingWorktree.path, "planning");
+
+        // Set the worktree as the active project
+        setProjectPath(existingWorktree.path);
+
+        // Switch to worktrees panel
+        setMode("worktrees");
+
         await analyzeAndPlan(existingWorktree.path);
         return;
       }
@@ -1006,26 +1044,66 @@ FILES: [files]
             });
 
             // Parse questions into structured format
-            const questionLines = questionsText
-              .split("\n")
-              .filter((l) => l.trim());
-            const parsedQuestions: PlanQuestion[] = questionLines
-              .map((line, idx) => {
-                const trimmed = line
-                  .trim()
-                  .replace(/\*\*/g, "")
-                  .replace(/^[-+•]\s*/, "")
-                  .replace(/^\d+\.\s*/, "");
-                if (trimmed && trimmed.length > 5) {
-                  return {
-                    id: `q-${idx}`,
-                    question: trimmed,
-                    answer: "",
-                  };
+            // Handle numbered questions with potential sub-items
+            const lines = questionsText.split("\n").filter((l) => l.trim());
+            const parsedQuestions: PlanQuestion[] = [];
+            let currentQuestion = "";
+            let lastMainNumber = 0;
+
+            for (const line of lines) {
+              const trimmed = line.trim().replace(/\*\*/g, "");
+
+              // Check if this line starts with a number
+              const numberMatch = trimmed.match(/^(\d+)\.\s*(.*)/);
+
+              if (numberMatch) {
+                const num = parseInt(numberMatch[1], 10);
+                const content = numberMatch[2];
+
+                // Determine if this is a main question or sub-item
+                // Main questions: number > lastMainNumber or it's the first one
+                // Sub-items: number <= lastMainNumber (e.g., 3, 4 after 2)
+                if (num > lastMainNumber || lastMainNumber === 0) {
+                  // Save previous question if exists
+                  if (currentQuestion.length > 5) {
+                    parsedQuestions.push({
+                      id: `q-${parsedQuestions.length}`,
+                      question: currentQuestion,
+                      answer: "",
+                    });
+                  }
+                  currentQuestion = content;
+                  lastMainNumber = num;
+                } else {
+                  // This is a sub-item, append to current question
+                  currentQuestion += `\n  ${num}. ${content}`;
                 }
-                return null;
-              })
-              .filter((q): q is PlanQuestion => q !== null);
+              } else {
+                // Non-numbered line - could be continuation or bullet point
+                const cleanedLine = trimmed
+                  .replace(/^[-+•]\s*/, "")
+                  .replace(/^[a-z]\)\s*/i, ""); // Handle a), b) style
+
+                if (cleanedLine.length > 0) {
+                  if (currentQuestion) {
+                    // Append to current question
+                    currentQuestion += `\n  ${cleanedLine}`;
+                  } else {
+                    // Start new question
+                    currentQuestion = cleanedLine;
+                  }
+                }
+              }
+            }
+
+            // Don't forget the last question
+            if (currentQuestion.length > 5) {
+              parsedQuestions.push({
+                id: `q-${parsedQuestions.length}`,
+                question: currentQuestion,
+                answer: "",
+              });
+            }
 
             // Store questions and plan steps
             store.setQuestions(currentSessionId, parsedQuestions);
@@ -1398,6 +1476,14 @@ FILES: [files]
                 ✓ worktree ready
               </span>
             )}
+            {/* Stop button */}
+            <button
+              onClick={handleStop}
+              className="p-1 rounded hover:bg-red-500/20 text-text-muted hover:text-red-400 transition-colors"
+              title="Stop session"
+            >
+              <Square className="w-4 h-4" />
+            </button>
             {/* Minimize button */}
             <button
               onClick={handleMinimize}
