@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
-import { ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal } from 'lucide-react';
+import { ArrowUp, ArrowDown, Plus, Minus, ChevronDown, Search, Terminal, X } from 'lucide-react';
 import { PixelGit } from '@/components/feature-sidebar/PixelIcons';
 import { clsx } from 'clsx';
 import { useGitStore, useProjectStore, useTestStore, useChatStore, useWorktreeStore } from '@/stores';
@@ -112,6 +112,8 @@ export function GitPanel() {
     changes,
     ahead,
     behind,
+    stagedStats,
+    unstagedStats,
     worktrees,
     isLoading,
     isFetching,
@@ -137,6 +139,7 @@ export function GitPanel() {
     fetchProtectedBranches,
     listWorktrees,
     generateCommitMessage,
+    restoreFile,
     clearOutput,
     isReviewMode,
     setReviewMode,
@@ -407,6 +410,11 @@ export function GitPanel() {
 
   const handleUnstageAll = () => {
     if (projectPath) unstageAll(projectPath);
+  };
+
+  const handleRestoreFile = async (filePath: string) => {
+    if (!projectPath) return;
+    await restoreFile(projectPath, filePath);
   };
 
   const [isRestoring, setIsRestoring] = useState(false);
@@ -1183,9 +1191,18 @@ DESCRIPTION:
               {/* Staged Changes */}
               <div className="border-b border-border-primary">
                 <div className="flex items-center justify-between px-4 py-2 bg-bg-secondary">
-                  <span className="text-xs font-medium text-text-secondary">
-                    Staged ({stagedChanges.length})
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-text-secondary">
+                      Staged ({stagedChanges.length})
+                    </span>
+                    {stagedStats && (stagedStats.additions > 0 || stagedStats.deletions > 0) && (
+                      <span className="text-[10px] font-mono">
+                        <span className="text-green-500">+{stagedStats.additions}</span>
+                        {' '}
+                        <span className="text-red-500">-{stagedStats.deletions}</span>
+                      </span>
+                    )}
+                  </div>
                   {stagedChanges.length > 0 && (
                     <button
                       onClick={handleUnstageAll}
@@ -1227,9 +1244,18 @@ DESCRIPTION:
               {/* Unstaged Changes */}
               <div className="border-b border-border-primary">
                 <div className="flex items-center justify-between px-4 py-2 bg-bg-secondary">
-                  <span className="text-xs font-medium text-text-secondary">
-                    Changes ({unstagedChanges.length})
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-text-secondary">
+                      Changes ({unstagedChanges.length})
+                    </span>
+                    {unstagedStats && (unstagedStats.additions > 0 || unstagedStats.deletions > 0) && (
+                      <span className="text-[10px] font-mono">
+                        <span className="text-green-500">+{unstagedStats.additions}</span>
+                        {' '}
+                        <span className="text-red-500">-{unstagedStats.deletions}</span>
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1">
                     {unstagedChanges.length > 0 && (
                       <>
@@ -1265,6 +1291,13 @@ DESCRIPTION:
                         <span className="flex-1 min-w-0 text-xs text-text-primary font-mono truncate" title={change.path}>
                           {change.path}
                         </span>
+                        <button
+                          onClick={() => handleRestoreFile(change.path)}
+                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-bg-active text-red-400 hover:text-red-300 transition-opacity flex-shrink-0"
+                          title="Discard changes"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                         <button
                           onClick={() => handleStageFile(change.path)}
                           className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-bg-active text-text-muted hover:text-text-primary transition-opacity flex-shrink-0"

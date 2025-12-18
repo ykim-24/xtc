@@ -16,6 +16,7 @@ import { LinearPanel } from '@/components/linear/LinearPanel';
 import { MinimizedSessionIndicators } from '@/components/linear/MinimizedSessionIndicators';
 import { WorktreeGraph } from '@/components/worktrees';
 import { EditReview } from '@/components/edit-review';
+import { ProcessesPanel } from '@/components/processes';
 import { useSettingsStore, useTestStore, useEditsStore } from '@/stores';
 
 export function MainLayout() {
@@ -57,6 +58,7 @@ export function MainLayout() {
   const isGitMode = mode === 'git';
   const isLinearMode = mode === 'linear';
   const isWorktreesMode = mode === 'worktrees';
+  const isProcessesMode = mode === 'processes';
   const showFrameworkSelector = isTestsMode && !selectedFramework;
 
   return (
@@ -79,8 +81,8 @@ export function MainLayout() {
             <PanelResizeHandle className="w-1 bg-border-primary hover:bg-accent-primary transition-colors" />
           )}
 
-          {/* Center - Editor + Terminal (home mode) or TestPanel (tests mode) or GitPanel (git mode) or LinearPanel or Worktrees */}
-          <Panel id="center" order={2} defaultSize={isTestsMode || isGitMode || isLinearMode || isWorktreesMode ? 68 : 50} minSize={30}>
+          {/* Center - Editor + Terminal (home mode) or TestPanel (tests mode) or GitPanel (git mode) or LinearPanel or Worktrees or Processes */}
+          <Panel id="center" order={2} defaultSize={isTestsMode || isGitMode || isLinearMode || isWorktreesMode || isProcessesMode ? 68 : 50} minSize={30}>
             <div className="h-full relative">
               {/* Home mode content */}
               <div className={`h-full ${isHomeMode ? '' : 'hidden'}`}>
@@ -110,6 +112,10 @@ export function MainLayout() {
               {/* Worktrees mode content */}
               <div className={`h-full ${isWorktreesMode ? '' : 'hidden'}`}>
                 <WorktreeGraph />
+              </div>
+              {/* Processes mode content */}
+              <div className={`h-full ${isProcessesMode ? '' : 'hidden'}`}>
+                <ProcessesPanel />
               </div>
             </div>
           </Panel>

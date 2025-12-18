@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { X, Check, XIcon, ChevronRight, ChevronLeft, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw, Search, Trash2, Wrench } from 'lucide-react';
+import { X, Check, XIcon, ChevronRight, ChevronLeft, ChevronDown, FileCode, AlertCircle, AlertTriangle, Info, CheckCircle, MessageSquare, User, Bot, GitBranch, Play, Clock, RefreshCw, Search, Wrench } from 'lucide-react';
 import { useSkillsStore, useRulesStore, useChatStore } from '@/stores';
 import { useProjectStore } from '@/stores/projectStore';
 
@@ -140,7 +140,22 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
   const [existingPRComments, setExistingPRComments] = useState<Array<{ path: string; line: number; startLine?: number; body: string; user: string }>>([]);
   const [loadingPRComments, setLoadingPRComments] = useState(true);
   const [applyingFix, setApplyingFix] = useState<string | null>(null); // comment ID being fixed
+  const [showBranchDropdown, setShowBranchDropdown] = useState(false);
+  const [branchSearch, setBranchSearch] = useState('');
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [reviewMode, setReviewMode] = useState<'auto' | 'manual'>('auto');
+  const [autoPreset, setAutoPreset] = useState<'strict' | 'balanced' | 'relaxed'>('balanced');
+  const [customPrompt, setCustomPrompt] = useState('');
+  const [thresholds, setThresholds] = useState({
+    bugs: 50,
+    security: 50,
+    performance: 50,
+    maintainability: 50,
+    cleanliness: 50,
+  });
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const branchSearchInputRef = useRef<HTMLInputElement>(null);
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
   const diffRef = useRef<HTMLDivElement>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const hasInitialized = useRef(false);
@@ -202,6 +217,25 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
     loadBranches();
     loadPRComments();
   }, [projectPath]);
+
+  // Close branch dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (branchDropdownRef.current && !branchDropdownRef.current.contains(event.target as Node)) {
+        setShowBranchDropdown(false);
+        setBranchSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Focus branch search input when dropdown opens
+  useEffect(() => {
+    if (showBranchDropdown && branchSearchInputRef.current) {
+      branchSearchInputRef.current.focus();
+    }
+  }, [showBranchDropdown]);
 
   // Handle Cmd+F / Ctrl+F for search
   useEffect(() => {
@@ -704,7 +738,13 @@ export function ReviewPanel({ projectPath, branch, onClose }: ReviewPanelProps) 
           fileContent,
           file.path,
           file.diff,
-          { skills: skillsContext, rules: rulesContext }
+          {
+            skills: skillsContext,
+            rules: rulesContext,
+            customPrompt,
+            thresholds,
+            preset: reviewMode === 'auto' ? autoPreset : 'custom'
+          }
         );
 
         // Step 2: Process results
@@ -1466,136 +1506,388 @@ Apply the suggested fix and output the complete modified file content. Make sure
 
   // Setup View - choose base branch
   if (viewMode === 'setup') {
+    // Filter branches by search
+    const filteredBranches = availableBranches.filter(b =>
+      b.toLowerCase().includes(branchSearch.toLowerCase())
+    );
+
     return (
       <div className="flex flex-col h-full bg-bg-primary">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border-primary bg-bg-secondary">
-          <span className="text-xs font-mono text-text-muted">
-            review: <span className="text-accent-primary">{branch}</span>
-          </span>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
-            title="Close"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-text-muted">
+              review: <span className="text-accent-primary">{branch}</span>
+            </span>
+            <span className="text-xs text-text-muted">vs</span>
+            {/* Branch dropdown */}
+            <div className="relative" ref={branchDropdownRef}>
+              <button
+                onClick={() => setShowBranchDropdown(!showBranchDropdown)}
+                className="text-xs font-mono text-text-secondary hover:text-accent-primary transition-colors flex items-center gap-1"
+              >
+                [ {selectedBaseBranch || 'select branch'} <ChevronDown className="w-3 h-3" /> ]
+              </button>
+              {showBranchDropdown && (
+                <div className="absolute left-0 top-full mt-1 w-[250px] bg-bg-secondary border border-border-primary rounded shadow-lg z-50">
+                  {/* Search input */}
+                  <div className="p-2 border-b border-border-primary">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-text-muted" />
+                      <input
+                        ref={branchSearchInputRef}
+                        type="text"
+                        value={branchSearch}
+                        onChange={(e) => setBranchSearch(e.target.value)}
+                        placeholder="Search branches..."
+                        className="w-full pl-7 pr-2 py-1 text-xs font-mono bg-bg-primary border border-border-primary rounded focus:outline-none focus:border-accent-primary text-text-primary placeholder-text-muted"
+                      />
+                    </div>
+                  </div>
+                  {/* Branch list */}
+                  <div className="max-h-[250px] overflow-y-auto overflow-x-hidden">
+                    {filteredBranches.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-text-muted">No branches found</div>
+                    ) : (
+                      filteredBranches.map((b) => {
+                        const isSelected = b === selectedBaseBranch;
+                        const isBase = ['main', 'master', 'develop', 'origin/main', 'origin/master', 'origin/develop'].includes(b);
+                        return (
+                          <button
+                            key={b}
+                            onClick={() => {
+                              setSelectedBaseBranch(b);
+                              setShowBranchDropdown(false);
+                              setBranchSearch('');
+                            }}
+                            className={`w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-bg-hover transition-colors flex items-center justify-between ${
+                              isSelected ? 'bg-bg-active' : ''
+                            } ${isBase ? 'text-yellow-500' : 'text-text-primary'}`}
+                          >
+                            <span className="truncate">{b}</span>
+                            {isSelected && <span className="flex-shrink-0 ml-1">✓</span>}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="text-xs font-mono text-text-secondary hover:text-accent-primary transition-colors"
+            >
+              [ settings ]
+            </button>
+            <button
+              onClick={startReview}
+              disabled={!selectedBaseBranch}
+              className="text-xs font-mono text-text-secondary hover:text-accent-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              [ start ]
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Setup Content */}
-        <div className="flex-1 flex items-center justify-center p-8">
-          <div className="max-w-md w-full space-y-6">
-            <div className="text-center">
-              <GitBranch className="w-12 h-12 mx-auto text-accent-primary mb-4" />
-              <h2 className="text-lg font-medium text-text-primary mb-2">Code Review</h2>
-              <p className="text-sm text-text-muted">
-                Review changes on <span className="text-accent-primary font-mono">{branch}</span> compared to a base branch
-              </p>
-            </div>
+        {/* Settings Modal */}
+        {showSettingsModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-bg-primary border border-border-primary rounded-lg shadow-xl w-[500px] overflow-hidden flex flex-col">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary bg-bg-secondary">
+                <span className="text-sm font-medium text-text-primary">Review Settings</span>
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-            {/* Saved Reviews Section */}
-            {!loadingSavedReview && savedReviews.length > 0 && (
-              <div className="bg-bg-secondary border border-border-primary rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-text-secondary">
-                    <Clock className="w-4 h-4" />
-                    <span className="text-sm font-medium">
-                      {savedReviews.length} Saved Review{savedReviews.length > 1 ? 's' : ''}
-                    </span>
-                  </div>
+              {/* Modal Content */}
+              <div className="overflow-y-auto p-4 space-y-4">
+                {/* Mode Toggle */}
+                <div className="relative flex items-center p-1 bg-bg-secondary rounded">
+                  {/* Sliding background */}
+                  <div
+                    className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-accent-primary rounded transition-all duration-200 ease-out ${
+                      reviewMode === 'auto' ? 'left-1' : 'left-[calc(50%+2px)]'
+                    }`}
+                  />
                   <button
-                    onClick={deleteAllReviews}
-                    className="text-xs font-mono text-red-400/60 hover:text-red-400 transition-colors"
+                    onClick={() => setReviewMode('auto')}
+                    className={`relative flex-1 px-3 py-1.5 text-xs font-mono rounded transition-colors duration-200 ${
+                      reviewMode === 'auto'
+                        ? 'text-white'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
                   >
-                    clear all
+                    Auto
+                  </button>
+                  <button
+                    onClick={() => setReviewMode('manual')}
+                    className={`relative flex-1 px-3 py-1.5 text-xs font-mono rounded transition-colors duration-200 ${
+                      reviewMode === 'manual'
+                        ? 'text-white'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    Manual
                   </button>
                 </div>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {savedReviews.slice().reverse().map((review) => (
+
+                {/* Auto Mode */}
+                <div className={`grid transition-all duration-200 ease-out ${reviewMode === 'auto' ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                  <div className="overflow-hidden">
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-3 gap-3">
+                        {[
+                          { id: 'relaxed', label: 'chill', borderColor: 'border-blue-500', bgColor: 'bg-blue-500/20', textColor: 'text-blue-500', faceColor: '#3b82f6' },
+                          { id: 'balanced', label: 'normal', borderColor: 'border-green-500', bgColor: 'bg-green-500/20', textColor: 'text-green-500', faceColor: '#22c55e' },
+                          { id: 'strict', label: 'strict', borderColor: 'border-red-500', bgColor: 'bg-red-500/20', textColor: 'text-red-500', faceColor: '#ef4444' },
+                        ].map((preset) => (
+                          <button
+                            key={preset.id}
+                            onClick={() => {
+                              setAutoPreset(preset.id as typeof autoPreset);
+                              // Set thresholds based on preset
+                              if (preset.id === 'relaxed') {
+                                setThresholds({ bugs: 30, security: 40, performance: 20, maintainability: 20, cleanliness: 10 });
+                              } else if (preset.id === 'balanced') {
+                                setThresholds({ bugs: 60, security: 70, performance: 50, maintainability: 50, cleanliness: 40 });
+                              } else if (preset.id === 'strict') {
+                                setThresholds({ bugs: 90, security: 95, performance: 80, maintainability: 80, cleanliness: 70 });
+                              }
+                            }}
+                            className="flex flex-col items-center gap-2 group"
+                          >
+                            <div className={`w-full aspect-square rounded-lg border-2 flex items-center justify-center transition-all ${
+                              autoPreset === preset.id
+                                ? `${preset.borderColor} ${preset.bgColor}`
+                                : 'border-border-primary hover:border-border-secondary bg-bg-secondary'
+                            }`}>
+                              {/* Pixel art faces */}
+                              <svg viewBox="0 0 16 16" className="w-3/4 h-3/4" style={{ imageRendering: 'pixelated' }}>
+                                {preset.id === 'relaxed' && (
+                                  <>
+                                    {/* Chill face - dot eyes, small smile */}
+                                    {/* Eyes - simple dots */}
+                                    <rect x="4" y="6" width="2" height="2" fill={preset.faceColor} />
+                                    <rect x="10" y="6" width="2" height="2" fill={preset.faceColor} />
+                                    {/* Small content smile */}
+                                    <rect x="5" y="10" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="6" y="11" width="4" height="1" fill={preset.faceColor} />
+                                    <rect x="10" y="10" width="1" height="1" fill={preset.faceColor} />
+                                  </>
+                                )}
+                                {preset.id === 'balanced' && (
+                                  <>
+                                    {/* Normal face - dot eyes, nice smile */}
+                                    {/* Eyes - simple dots */}
+                                    <rect x="4" y="6" width="2" height="2" fill={preset.faceColor} />
+                                    <rect x="10" y="6" width="2" height="2" fill={preset.faceColor} />
+                                    {/* Happy smile */}
+                                    <rect x="4" y="10" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="5" y="11" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="6" y="12" width="4" height="1" fill={preset.faceColor} />
+                                    <rect x="10" y="11" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="11" y="10" width="1" height="1" fill={preset.faceColor} />
+                                  </>
+                                )}
+                                {preset.id === 'strict' && (
+                                  <>
+                                    {/* Angry face - diagonal brows, dot eyes, frown */}
+                                    {/* Left eyebrow - short diagonal */}
+                                    <rect x="3" y="4" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="4" y="5" width="1" height="1" fill={preset.faceColor} />
+                                    {/* Right eyebrow - short diagonal */}
+                                    <rect x="11" y="5" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="12" y="4" width="1" height="1" fill={preset.faceColor} />
+                                    {/* Eyes - simple dots */}
+                                    <rect x="4" y="7" width="2" height="2" fill={preset.faceColor} />
+                                    <rect x="10" y="7" width="2" height="2" fill={preset.faceColor} />
+                                    {/* Frown */}
+                                    <rect x="5" y="12" width="1" height="1" fill={preset.faceColor} />
+                                    <rect x="6" y="11" width="4" height="1" fill={preset.faceColor} />
+                                    <rect x="10" y="12" width="1" height="1" fill={preset.faceColor} />
+                                  </>
+                                )}
+                              </svg>
+                            </div>
+                            <span className={`text-xs font-mono transition-colors ${
+                              autoPreset === preset.id
+                                ? preset.textColor
+                                : 'text-text-muted group-hover:text-text-secondary'
+                            }`}>
+                              {preset.label}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Manual Mode */}
+                <div className={`grid transition-all duration-200 ease-out ${reviewMode === 'manual' ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                  <div className="overflow-hidden">
+                    <div className="space-y-4">
+                      {/* Custom Prompt */}
+                      <div>
+                        <label className="block text-xs font-medium text-text-muted mb-2">
+                          Custom Instructions
+                        </label>
+                        <textarea
+                          value={customPrompt}
+                          onChange={(e) => setCustomPrompt(e.target.value)}
+                          placeholder="Add custom instructions for the review (e.g., 'Focus on error handling' or 'Ignore styling issues')..."
+                          className="w-full h-24 px-3 py-2 text-xs font-mono bg-bg-secondary border border-border-primary rounded resize-none focus:outline-none focus:border-accent-primary text-text-primary placeholder-text-muted"
+                        />
+                      </div>
+
+                      {/* Thresholds */}
+                      <div>
+                        <label className="block text-xs font-medium text-text-muted mb-3">
+                          Sensitivity Thresholds
+                        </label>
+                        <div className="space-y-3">
+                          {[
+                            { key: 'bugs', label: 'Bugs', desc: 'Logic errors, edge cases, null checks' },
+                            { key: 'security', label: 'Security', desc: 'Vulnerabilities, injection, auth issues' },
+                            { key: 'performance', label: 'Performance', desc: 'Inefficiencies, memory leaks, N+1' },
+                            { key: 'maintainability', label: 'Maintainability', desc: 'Complexity, readability, patterns' },
+                            { key: 'cleanliness', label: 'Code Style', desc: 'Naming, formatting, consistency' },
+                          ].map((threshold) => (
+                            <div key={threshold.key} className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="text-xs text-text-primary">{threshold.label}</span>
+                                  <span className="text-[10px] text-text-muted ml-2">{threshold.desc}</span>
+                                </div>
+                                <span className="text-xs font-mono text-text-muted w-8 text-right">
+                                  {thresholds[threshold.key as keyof typeof thresholds]}%
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={thresholds[threshold.key as keyof typeof thresholds]}
+                                onChange={(e) => setThresholds(prev => ({
+                                  ...prev,
+                                  [threshold.key]: parseInt(e.target.value)
+                                }))}
+                                className="w-full h-1.5 bg-bg-secondary rounded-lg appearance-none cursor-pointer accent-accent-primary"
+                              />
+                              <div className="flex justify-between text-[10px] text-text-muted">
+                                <span>Ignore</span>
+                                <span>Strict</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end gap-3 px-4 py-3 border-t border-border-primary bg-bg-secondary">
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="text-xs font-mono text-text-secondary hover:text-text-primary transition-colors"
+                >
+                  [ cancel ]
+                </button>
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="text-xs font-mono text-text-secondary hover:text-accent-primary transition-colors"
+                >
+                  [ save ]
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Setup Content */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Saved Reviews Column - Left */}
+          <div className="w-64 border-r border-border-primary flex flex-col">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary bg-bg-secondary">
+              <span className="text-xs font-mono text-text-muted">saved reviews</span>
+              {savedReviews.length > 0 && (
+                <button
+                  onClick={deleteAllReviews}
+                  className="text-xs font-mono text-text-muted hover:text-red-400 transition-colors"
+                >
+                  [ clear all ]
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {loadingSavedReview ? (
+                <div className="p-3 text-xs text-text-muted">Loading...</div>
+              ) : savedReviews.length === 0 ? (
+                <div className="p-3 text-xs text-text-muted">No saved reviews</div>
+              ) : (
+                savedReviews.slice().reverse().map((review, idx) => {
+                  const approves = review.reviewData.filter(f => f.verdict === 'approve').length;
+                  const concerns = review.reviewData.filter(f => f.verdict === 'concern').length;
+                  const blocks = review.reviewData.filter(f => f.verdict === 'block').length;
+                  const total = review.reviewData.length;
+                  const scoreColor = blocks > 0 ? 'text-red-400' : concerns > 0 ? 'text-yellow-400' : 'text-green-400';
+                  return (
                     <div
                       key={review.index}
-                      className="flex items-center justify-between p-2 rounded bg-bg-primary hover:bg-bg-hover transition-colors group"
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-bg-hover transition-colors group border-b border-border-primary"
                     >
+                      <span className="text-xs font-mono text-text-muted w-4">{idx + 1}.</span>
                       <button
                         onClick={() => loadSavedReviewByIndex(review.index)}
-                        className="flex-1 text-left"
+                        className="flex-1 text-left min-w-0"
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-accent-primary">#{review.index}</span>
-                          <span className="text-xs text-text-muted">
-                            {new Date(review.timestamp).toLocaleString()}
-                          </span>
+                        <div className="text-xs font-mono text-text-primary truncate">
+                          vs {review.baseBranch}
                         </div>
-                        <div className="text-xs text-text-muted mt-0.5">
-                          vs {review.baseBranch} · {review.reviewData.length} files
+                        <div className="text-[10px] text-text-muted mt-0.5">
+                          {total} files · {new Date(review.timestamp).toLocaleDateString()}
                         </div>
                       </button>
+                      <span className={`text-xs font-mono ${scoreColor}`} title={`${approves} approve, ${concerns} concern, ${blocks} block`}>
+                        {approves}/{total}
+                      </span>
                       <button
                         onClick={() => deleteReview(review.index)}
-                        className="p-1 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        className="p-1 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
                         title="Delete this review"
                       >
                         <X className="w-3 h-3" />
                       </button>
                     </div>
-                  ))}
-                </div>
-                <div className="flex gap-2 pt-2 border-t border-border-primary">
-                  <button
-                    onClick={() => loadSavedReviewByIndex(savedReviews[savedReviews.length - 1].index)}
-                    className="flex-1 flex items-center justify-center gap-1 text-xs font-mono bg-accent-primary/20 text-accent-primary hover:bg-accent-primary/30 px-3 py-2 rounded transition-colors"
-                  >
-                    <CheckCircle className="w-3 h-3" /> view latest
-                  </button>
-                </div>
-              </div>
-            )}
+                  );
+                })
+              )}
+            </div>
+          </div>
 
-            {/* New Review Section - always shown in setup view */}
-            {!loadingSavedReview && (
-              <>
-                <div className="space-y-3">
-                  <label className="block text-xs font-medium text-text-muted">
-                    Compare against
-                  </label>
-                  <select
-                    value={selectedBaseBranch}
-                    onChange={(e) => setSelectedBaseBranch(e.target.value)}
-                    className="w-full bg-bg-secondary border border-border-primary rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-primary"
-                  >
-                    {availableBranches.length === 0 ? (
-                      <option value="">Loading branches...</option>
-                    ) : (
-                      availableBranches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  <p className="text-xs text-text-muted">
-                    Claude will review the diff between <span className="font-mono text-text-secondary">{selectedBaseBranch || '...'}</span> and <span className="font-mono text-text-secondary">{branch}</span>
-                  </p>
-                </div>
-
-                <div className="flex justify-end">
-                  <button
-                    onClick={startReview}
-                    disabled={!selectedBaseBranch}
-                    className="flex items-center gap-1 text-xs font-mono text-accent-primary hover:text-green-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    [ <Play className="w-3 h-3 inline" /> start ]
-                  </button>
-                </div>
-              </>
-            )}
-
-            {/* Loading state */}
-            {loadingSavedReview && (
-              <div className="text-center text-text-muted text-sm">
-                Loading...
-              </div>
-            )}
+          {/* Main Content - Right */}
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center text-text-muted">
+              <GitBranch className="w-12 h-12 mx-auto text-text-muted/50 mb-4" />
+              <p className="text-sm">Select a base branch and click start to begin review</p>
+            </div>
           </div>
         </div>
       </div>
@@ -1674,15 +1966,6 @@ Apply the suggested fix and output the complete modified file content. Make sure
             </span>
           </span>
           <div className="flex items-center gap-2">
-            {currentReviewIndex !== null && (
-              <button
-                onClick={() => deleteReview(currentReviewIndex)}
-                className="text-xs font-mono text-text-muted hover:text-red-400 transition-colors"
-                title="Delete this review"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            )}
             <button
               onClick={handleRegenerate}
               className="text-xs font-mono text-text-muted hover:text-accent-primary transition-colors"
@@ -1690,6 +1973,15 @@ Apply the suggested fix and output the complete modified file content. Make sure
             >
               [ new ]
             </button>
+            {currentReviewIndex !== null && (
+              <button
+                onClick={() => deleteReview(currentReviewIndex)}
+                className="text-xs font-mono text-text-muted hover:text-red-400 transition-colors"
+                title="Delete this review"
+              >
+                [ delete ]
+              </button>
+            )}
             <button
               onClick={onClose}
               className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"

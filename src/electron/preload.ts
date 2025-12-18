@@ -317,6 +317,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("git:stage", projectPath, files),
     unstage: (projectPath: string, files: string[]) =>
       ipcRenderer.invoke("git:unstage", projectPath, files),
+    diffStats: (projectPath: string, staged: boolean) =>
+      ipcRenderer.invoke("git:diffStats", projectPath, staged),
     commit: (projectPath: string, message: string) =>
       ipcRenderer.invoke("git:commit", projectPath, message),
     push: (projectPath: string, branch?: string) =>
@@ -334,6 +336,8 @@ contextBridge.exposeInMainWorld("electron", {
       ipcRenderer.invoke("git:checkout", projectPath, branchName),
     restore: (projectPath: string) =>
       ipcRenderer.invoke("git:restore", projectPath),
+    restoreFile: (projectPath: string, filePath: string) =>
+      ipcRenderer.invoke("git:restoreFile", projectPath, filePath),
     worktree: {
       list: (projectPath: string) =>
         ipcRenderer.invoke("git:worktree:list", projectPath),
@@ -466,7 +470,13 @@ contextBridge.exposeInMainWorld("electron", {
     fileContent: string,
     filePath: string,
     diff: string,
-    context: { skills: string; rules: string }
+    context: {
+      skills: string;
+      rules: string;
+      customPrompt?: string;
+      thresholds?: { bugs: number; security: number; performance: number; maintainability: number; cleanliness: number };
+      preset?: 'relaxed' | 'balanced' | 'strict' | 'custom';
+    }
   ) =>
     ipcRenderer.invoke(
       "claude:review",

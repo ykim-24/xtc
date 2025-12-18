@@ -1717,20 +1717,24 @@ async function getFileContentHash(filePath: string): Promise<string | null> {
 
 // Helper: Snapshot current state of files for comparison
 async function snapshotFileState(
-  projectPath: string
-): Promise<Map<string, string | null>> {
-  const snapshot = new Map<string, string | null>();
+  projectPath: string,
+  targetFiles?: string[] // Optional list of specific files to snapshot (active file, context files)
+): Promise<Map<string, { content: string; hash: string | null }>> {
+  const snapshot = new Map<string, { content: string; hash: string | null }>();
 
-  if (!(await isGitRepo(projectPath))) {
-    return snapshot;
-  }
-
-  const changes = await getGitChanges(projectPath);
-
-  for (const change of changes) {
-    const fullPath = path.join(projectPath, change.file);
-    const hash = await getFileContentHash(fullPath);
-    snapshot.set(change.file, hash);
+  // Only snapshot specific target files (lightweight)
+  if (targetFiles && targetFiles.length > 0) {
+    for (const filePath of targetFiles) {
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const hash = await getFileContentHash(filePath);
+        // Store with relative path for matching
+        const relativePath = path.relative(projectPath, filePath);
+        snapshot.set(relativePath, { content, hash });
+      } catch {
+        // File might not exist
+      }
+    }
   }
 
   return snapshot;
@@ -1739,7 +1743,7 @@ async function snapshotFileState(
 // Helper: Detect changes and create pending edits
 async function detectChangesAndCreateEdits(
   projectPath: string,
-  beforeSnapshot: Map<string, string | null>
+  beforeSnapshot: Map<string, { content: string; hash: string | null }>
 ): Promise<PendingEdit[]> {
   const edits: PendingEdit[] = [];
 
@@ -1756,22 +1760,30 @@ async function detectChangesAndCreateEdits(
     try {
       // Get current content hash
       const currentHash = await getFileContentHash(fullPath);
-      const previousHash = beforeSnapshot.get(change.file);
+      const previousState = beforeSnapshot.get(change.file);
 
       // Skip if file existed before with same content (no change from Claude)
-      if (previousHash !== undefined && previousHash === currentHash) {
+      if (previousState !== undefined && previousState.hash === currentHash) {
         continue;
       }
 
       // Get current content
       const newContent = await fs.readFile(fullPath, "utf-8");
 
-      // Get original content (empty string for new files, or from git HEAD)
-      const originalContent = isNewFile
-        ? ""
-        : (await getOriginalContent(projectPath, change.file)) || "";
+      // Get original content: use snapshot content (before Claude ran) if available,
+      // otherwise empty for new files or git HEAD as fallback
+      let originalContent: string;
+      if (isNewFile) {
+        originalContent = "";
+      } else if (previousState?.content !== undefined) {
+        // Use the content from before Claude ran for accurate diff
+        originalContent = previousState.content;
+      } else {
+        // Fallback to git HEAD for files not in snapshot
+        originalContent = (await getOriginalContent(projectPath, change.file)) || "";
+      }
 
-      // Only create edit if content actually changed from git HEAD
+      // Only create edit if content actually changed
       if (newContent !== originalContent) {
         edits.push({
           id: crypto.randomUUID(),
@@ -1845,10 +1857,16 @@ ipcMain.handle(
       const planOnly = options?.planOnly ?? false;
 
       // Snapshot file state BEFORE Claude runs to detect only new changes
-      // Skip snapshot in planOnly mode since no changes should be made
+      // Only snapshot active file and context files (lightweight, targeted)
+      const targetFiles: string[] = [];
+      if (context.activeFile?.path) targetFiles.push(context.activeFile.path);
+      if (context.contextFiles) {
+        targetFiles.push(...context.contextFiles.map(f => f.path));
+      }
+
       const beforeSnapshot =
         !planOnly && projectPath
-          ? await snapshotFileState(projectPath)
+          ? await snapshotFileState(projectPath, targetFiles)
           : new Map();
 
       claudeLogger.start("Sending message to Claude", {
@@ -2334,6 +2352,9 @@ ipcMain.handle("claude:rejectEdit", async (_, editId: string) => {
 interface TerminalSession {
   pty: pty.IPty;
   id: string;
+  shell: string;
+  cwd: string;
+  createdAt: number;
 }
 
 const terminals: Map<string, TerminalSession> = new Map();
@@ -2367,7 +2388,8 @@ ipcMain.handle("terminal:create", (_, cwd?: string) => {
     } as Record<string, string>,
   });
 
-  terminals.set(id, { pty: ptyProcess, id });
+  const terminalCwd = cwd || os.homedir();
+  terminals.set(id, { pty: ptyProcess, id, shell, cwd: terminalCwd, createdAt: Date.now() });
   terminalLogger.success("Terminal created", { id: id.substring(0, 8) });
 
   ptyProcess.onData((data) => {
@@ -2430,11 +2452,15 @@ ipcMain.handle("terminal:kill", (_, id: string) => {
   return { success: true };
 });
 
-// List all terminal sessions with their PIDs
+// List all terminal sessions with their PIDs and details
 ipcMain.handle("terminal:list", () => {
   const sessionList = Array.from(terminals.entries()).map(([id, session]) => ({
     id,
     pid: session.pty.pid,
+    shell: session.shell,
+    cwd: session.cwd,
+    createdAt: session.createdAt,
+    process: session.pty.process, // Current running process name
   }));
   return { success: true, sessions: sessionList };
 });
@@ -3809,6 +3835,39 @@ ipcMain.handle(
   }
 );
 
+// Get diff stats (lines added/removed)
+ipcMain.handle(
+  "git:diffStats",
+  async (_, projectPath: string, staged: boolean) => {
+    // Use --numstat for parseable output: added \t deleted \t filename
+    const args = staged
+      ? ["diff", "--cached", "--numstat"]
+      : ["diff", "--numstat"];
+    const result = await runGit(projectPath, args);
+
+    if (result.code !== 0) {
+      return { success: false, error: result.stderr };
+    }
+
+    let additions = 0;
+    let deletions = 0;
+
+    // Parse numstat output
+    const lines = result.stdout?.split("\n").filter((l) => l.trim()) || [];
+    for (const line of lines) {
+      const parts = line.split("\t");
+      if (parts.length >= 2) {
+        const added = parseInt(parts[0], 10);
+        const deleted = parseInt(parts[1], 10);
+        if (!isNaN(added)) additions += added;
+        if (!isNaN(deleted)) deletions += deleted;
+      }
+    }
+
+    return { success: true, additions, deletions };
+  }
+);
+
 // Commit
 ipcMain.handle(
   "git:commit",
@@ -3989,6 +4048,47 @@ ipcMain.handle("git:restore", async (_, projectPath: string) => {
   }
   return { success: cleanResult.code === 0, error: cleanResult.stderr };
 });
+
+// Restore/discard changes for a single file
+ipcMain.handle(
+  "git:restoreFile",
+  async (_, projectPath: string, filePath: string) => {
+    gitLogger.start(`Restoring file: ${filePath}`);
+
+    // Check the file status first
+    const statusResult = await runGit(projectPath, [
+      "status",
+      "--porcelain",
+      filePath,
+    ]);
+    const statusLine = statusResult.stdout?.trim() || "";
+
+    // Handle untracked files (status starts with ??)
+    if (statusLine.startsWith("??")) {
+      // Delete untracked file
+      try {
+        await fs.unlink(path.join(projectPath, filePath));
+        gitLogger.success(`Deleted untracked file: ${filePath}`);
+        return { success: true };
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to delete file";
+        gitLogger.error(`Failed to delete: ${filePath}`, errorMsg);
+        return { success: false, error: errorMsg };
+      }
+    }
+
+    // For tracked files, use git restore
+    const restoreResult = await runGit(projectPath, ["restore", filePath]);
+    if (restoreResult.code === 0) {
+      gitLogger.success(`Restored file: ${filePath}`);
+      return { success: true };
+    } else {
+      gitLogger.error(`Failed to restore: ${filePath}`, restoreResult.stderr);
+      return { success: false, error: restoreResult.stderr };
+    }
+  }
+);
 
 // List worktrees
 ipcMain.handle("git:worktree:list", async (_, projectPath: string) => {
@@ -5733,7 +5833,13 @@ ipcMain.handle(
     _fileContent: string,
     filePath: string,
     diff: string,
-    context: { skills: string; rules: string }
+    context: {
+      skills: string;
+      rules: string;
+      customPrompt?: string;
+      thresholds?: { bugs: number; security: number; performance: number; maintainability: number; cleanliness: number };
+      preset?: 'relaxed' | 'balanced' | 'strict' | 'custom';
+    }
   ) => {
     return new Promise((resolve) => {
       // Annotate diff with line numbers for clarity
@@ -5770,8 +5876,49 @@ ipcMain.handle(
 
       const annotatedDiff = annotateDiff(diff);
 
+      // Build preset-specific review instructions
+      const presetInstructions: Record<string, string> = {
+        relaxed: `REVIEW MODE: CHILL (Relaxed)
+- Only flag CRITICAL bugs that would cause crashes, data loss, or security vulnerabilities
+- Ignore minor style issues, naming conventions, and formatting
+- Skip performance suggestions unless they're severe (O(n²) or worse)
+- Be lenient - if code works and is reasonably readable, approve it
+- Highlights: Only mention truly exceptional code patterns`,
+
+        balanced: `REVIEW MODE: NORMAL (Balanced)
+- Flag bugs, security issues, and significant logic errors
+- Note important maintainability concerns (complex functions, unclear logic)
+- Skip minor style nitpicks but flag inconsistent patterns
+- Balance between thorough review and actionable feedback
+- Highlights: Note good patterns that others could learn from`,
+
+        strict: `REVIEW MODE: STRICT
+- Flag ALL potential issues: bugs, security, performance, maintainability
+- Check for edge cases, null handling, error handling
+- Note code style inconsistencies and naming issues
+- Suggest optimizations and best practices
+- Be thorough - better to over-report than miss issues
+- Highlights: Only exceptional, novel solutions`,
+
+        custom: context.thresholds ? `REVIEW MODE: CUSTOM
+Review sensitivity levels (0=ignore, 100=strict):
+- Bugs/Logic errors: ${context.thresholds.bugs}%
+- Security issues: ${context.thresholds.security}%
+- Performance: ${context.thresholds.performance}%
+- Maintainability: ${context.thresholds.maintainability}%
+- Code style: ${context.thresholds.cleanliness}%
+
+Adjust your review strictness based on these levels. Lower values mean be more lenient, higher values mean flag more issues.` : ''
+      };
+
+      const presetPrompt = presetInstructions[context.preset || 'balanced'] || presetInstructions.balanced;
+      const customInstructions = context.customPrompt ? `\nADDITIONAL INSTRUCTIONS:\n${context.customPrompt}\n` : '';
+
       // Build a focused review prompt
       const reviewPrompt = `You are reviewing code changes for a project. Analyze the following file and its changes.
+
+${presetPrompt}
+${customInstructions}
 
 PROJECT CONTEXT:
 ${context.skills}

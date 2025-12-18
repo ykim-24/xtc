@@ -627,6 +627,10 @@ interface GitAPI {
     projectPath: string,
     files: string[]
   ) => Promise<GitOperationResult>;
+  diffStats: (
+    projectPath: string,
+    staged: boolean
+  ) => Promise<{ success: boolean; additions?: number; deletions?: number; error?: string }>;
   commit: (projectPath: string, message: string) => Promise<GitOperationResult>;
   push: (projectPath: string, branch?: string) => Promise<GitOperationResult>;
   pull: (projectPath: string) => Promise<GitOperationResult>;
@@ -641,6 +645,10 @@ interface GitAPI {
     branchName: string
   ) => Promise<GitOperationResult>;
   restore: (projectPath: string) => Promise<GitOperationResult>;
+  restoreFile: (
+    projectPath: string,
+    filePath: string
+  ) => Promise<GitOperationResult>;
   worktree: {
     list: (projectPath: string) => Promise<GitWorktreeListResult>;
     add: (
@@ -785,7 +793,13 @@ interface ElectronAPI {
     fileContent: string,
     filePath: string,
     diff: string,
-    context: { skills: string; rules: string }
+    context: {
+      skills: string;
+      rules: string;
+      customPrompt?: string;
+      thresholds?: { bugs: number; security: number; performance: number; maintainability: number; cleanliness: number };
+      preset?: 'relaxed' | 'balanced' | 'strict' | 'custom';
+    }
   ) => Promise<ReviewResult>;
   testUpdate: () => Promise<void>;
   onUpdateAvailable: (

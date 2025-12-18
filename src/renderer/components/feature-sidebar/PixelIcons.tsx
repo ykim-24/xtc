@@ -341,6 +341,36 @@ export function PixelLinear({ className }: PixelIconProps) {
   );
 }
 
+// CPU icon - pixel art processor/chip
+export function PixelCpu({ className }: PixelIconProps) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} fill="currentColor" shapeRendering="crispEdges">
+      {/* CPU body */}
+      <rect x="3" y="3" width="10" height="10" />
+
+      {/* Inner chip detail */}
+      <rect x="5" y="5" width="6" height="6" fillOpacity="0" />
+      <rect x="6" y="6" width="4" height="4" />
+
+      {/* Top pins */}
+      <rect x="5" y="1" width="2" height="2" />
+      <rect x="9" y="1" width="2" height="2" />
+
+      {/* Bottom pins */}
+      <rect x="5" y="13" width="2" height="2" />
+      <rect x="9" y="13" width="2" height="2" />
+
+      {/* Left pins */}
+      <rect x="1" y="5" width="2" height="2" />
+      <rect x="1" y="9" width="2" height="2" />
+
+      {/* Right pins */}
+      <rect x="13" y="5" width="2" height="2" />
+      <rect x="13" y="9" width="2" height="2" />
+    </svg>
+  );
+}
+
 // Datadog icon - simplified dog face
 export function PixelDatadog({ className }: PixelIconProps) {
   return (

@@ -2,9 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { clsx } from 'clsx';
 import { useTestStore } from '@/stores/testStore';
 import { AddFeatureModal } from './AddFeatureModal';
-import { PixelHome, PixelTests, PixelGit, PixelPlus, PixelLinear, PixelTree } from './PixelIcons';
+import { PixelHome, PixelTests, PixelGit, PixelPlus, PixelLinear, PixelTree, PixelCpu } from './PixelIcons';
 
-type SidebarMode = 'home' | 'tests' | 'git' | 'linear' | 'worktrees';
+type SidebarMode = 'home' | 'tests' | 'git' | 'linear' | 'worktrees' | 'processes';
 
 interface SidebarItem {
   id: SidebarMode;
@@ -18,6 +18,7 @@ const baseItems: SidebarItem[] = [
   { id: 'tests', icon: PixelTests, label: 'Tests', shortcut: '2' },
   { id: 'git', icon: PixelGit, label: 'Git', shortcut: '3' },
   { id: 'worktrees', icon: PixelTree, label: 'Worktrees', shortcut: '4' },
+  { id: 'processes', icon: PixelCpu, label: 'Processes', shortcut: '6' },
 ];
 
 export function FeatureSidebar() {
@@ -48,7 +49,7 @@ export function FeatureSidebar() {
     ...(connectedIntegrations.has('linear') ? [{ id: 'linear' as SidebarMode, icon: PixelLinear, label: 'Linear', shortcut: '5' }] : []),
   ];
 
-  // Keyboard shortcuts: Cmd+1, Cmd+2, Cmd+3, Cmd+4, Cmd+5
+  // Keyboard shortcuts: Cmd+1, Cmd+2, Cmd+3, Cmd+4, Cmd+5, Cmd+6
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey) {
@@ -68,6 +69,9 @@ export function FeatureSidebar() {
         } else if (key === '5' && connectedIntegrations.has('linear')) {
           e.preventDefault();
           setMode('linear');
+        } else if (key === '6') {
+          e.preventDefault();
+          setMode('processes');
         }
       }
     };

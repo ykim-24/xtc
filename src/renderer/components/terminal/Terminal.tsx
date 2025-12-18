@@ -2,15 +2,10 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { Plus, X, TerminalIcon, Cpu, RefreshCw } from 'lucide-react';
+import { Plus, X, TerminalIcon } from 'lucide-react';
 import { IconButton } from '@/components/ui';
 import { useProjectStore } from '@/stores';
 import '@xterm/xterm/css/xterm.css';
-
-interface TerminalProcess {
-  id: string;
-  pid: number;
-}
 
 interface TerminalTab {
   id: string;
@@ -27,49 +22,9 @@ export function TerminalPanel() {
   const { projectPath } = useProjectStore();
   const [tabs, setTabs] = useState<TerminalTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [showPidViewer, setShowPidViewer] = useState(false);
-  const [processes, setProcesses] = useState<TerminalProcess[]>([]);
-  const [isLoadingPids, setIsLoadingPids] = useState(false);
   const terminalInstancesRef = useRef<Map<string, TerminalInstance>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
-  const pidViewerRef = useRef<HTMLDivElement>(null);
-
-  // Load terminal PIDs
-  const loadPids = useCallback(async () => {
-    setIsLoadingPids(true);
-    try {
-      const result = await window.electron?.terminal.list();
-      if (result?.success && result.sessions) {
-        setProcesses(result.sessions);
-      }
-    } catch (error) {
-      console.error('Failed to load terminal PIDs:', error);
-    } finally {
-      setIsLoadingPids(false);
-    }
-  }, []);
-
-  // Close PID viewer when clicking outside
-  useEffect(() => {
-    if (!showPidViewer) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (pidViewerRef.current && !pidViewerRef.current.contains(e.target as Node)) {
-        setShowPidViewer(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showPidViewer]);
-
-  // Load PIDs when opening viewer
-  useEffect(() => {
-    if (showPidViewer) {
-      loadPids();
-    }
-  }, [showPidViewer, loadPids]);
 
   // Create xterm instance for a terminal
   const createXtermInstance = useCallback((terminalId: string): TerminalInstance => {
@@ -285,12 +240,6 @@ export function TerminalPanel() {
     window.electron?.terminal.write(activeTabId, `cd "${projectPath}" && clear\r`);
   }, [projectPath, activeTabId]);
 
-  // Get tab name for a process
-  const getTabName = (processId: string) => {
-    const tab = tabs.find(t => t.id === processId);
-    return tab?.name || `Terminal (${processId.substring(0, 8)})`;
-  };
-
   return (
     <div className="h-full flex flex-col border-t border-border-primary bg-bg-secondary">
       {/* Header */}
@@ -298,71 +247,9 @@ export function TerminalPanel() {
         <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
           Terminal
         </span>
-        <div className="flex items-center gap-1">
-          {/* PID Viewer Button */}
-          <div className="relative" ref={pidViewerRef}>
-            <IconButton
-              size="sm"
-              onClick={() => setShowPidViewer(!showPidViewer)}
-              title="View PIDs"
-              className={showPidViewer ? 'bg-bg-tertiary' : ''}
-            >
-              <Cpu className="w-3.5 h-3.5" />
-            </IconButton>
-            {/* PID Viewer Dropdown */}
-            {showPidViewer && (
-              <div className="absolute right-0 top-full mt-1 w-64 bg-bg-secondary border border-border-primary rounded shadow-lg z-50">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-border-secondary">
-                  <span className="text-xs font-medium text-text-primary">Terminal Processes</span>
-                  <button
-                    onClick={loadPids}
-                    disabled={isLoadingPids}
-                    className="p-1 hover:bg-bg-hover rounded transition-colors"
-                    title="Refresh"
-                  >
-                    <RefreshCw className={`w-3 h-3 text-text-muted ${isLoadingPids ? 'animate-spin' : ''}`} />
-                  </button>
-                </div>
-                <div className="max-h-48 overflow-y-auto">
-                  {processes.length === 0 ? (
-                    <div className="px-3 py-4 text-center text-text-muted text-xs">
-                      {isLoadingPids ? 'Loading...' : 'No active terminals'}
-                    </div>
-                  ) : (
-                    processes.map((proc) => (
-                      <div
-                        key={proc.id}
-                        className="flex items-center justify-between px-3 py-2 hover:bg-bg-hover group"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs text-text-primary truncate">
-                            {getTabName(proc.id)}
-                          </div>
-                          <div className="text-[10px] text-text-muted font-mono">
-                            PID: {proc.pid}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            closeTerminal(proc.id);
-                            loadPids();
-                          }}
-                          className="p-1 opacity-0 group-hover:opacity-100 hover:bg-accent-error/20 rounded transition-all"
-                          title="Kill process"
-                        >
-                          <X className="w-3 h-3 text-accent-error" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <IconButton size="sm" onClick={createTerminal} title="New Terminal">
-            <Plus className="w-3.5 h-3.5" />
-          </IconButton>
-        </div>
+        <IconButton size="sm" onClick={createTerminal} title="New Terminal">
+          <Plus className="w-3.5 h-3.5" />
+        </IconButton>
       </div>
 
       {/* Tabs */}
