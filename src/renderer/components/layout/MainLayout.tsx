@@ -84,19 +84,19 @@ export function MainLayout() {
             <div className="h-full relative">
               {/* Home mode content */}
               <div className={`h-full ${isHomeMode ? '' : 'hidden'}`}>
-                {hasPendingEdits ? (
-                  /* Show EditReview when there are pending edits */
-                  <EditReview />
-                ) : terminalVisible ? (
+                {terminalVisible ? (
                   <PanelGroup direction="vertical" autoSaveId="editor-terminal">
                     <Panel id="editor" defaultSize={70} minSize={30}>
-                      <EditorArea />
+                      {/* Show EditReview or EditorArea based on pending edits */}
+                      {hasPendingEdits ? <EditReview /> : <EditorArea />}
                     </Panel>
                     <PanelResizeHandle className="h-1 bg-border-primary hover:bg-accent-primary transition-colors" />
                     <Panel id="terminal" defaultSize={30} minSize={15}>
                       <TerminalPanel />
                     </Panel>
                   </PanelGroup>
+                ) : hasPendingEdits ? (
+                  <EditReview />
                 ) : (
                   <EditorArea />
                 )}
