@@ -2430,6 +2430,15 @@ ipcMain.handle("terminal:kill", (_, id: string) => {
   return { success: true };
 });
 
+// List all terminal sessions with their PIDs
+ipcMain.handle("terminal:list", () => {
+  const sessionList = Array.from(terminals.entries()).map(([id, session]) => ({
+    id,
+    pid: session.pty.pid,
+  }));
+  return { success: true, sessions: sessionList };
+});
+
 // Clean up terminals on app quit
 app.on("before-quit", async () => {
   systemLogger.info("App quitting, cleaning up...");

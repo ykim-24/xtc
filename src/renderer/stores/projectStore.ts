@@ -61,6 +61,11 @@ interface ProjectState {
   revealPath: string | null;
   revealInExplorer: (path: string) => void;
   clearRevealPath: () => void;
+
+  // Goto line
+  pendingGotoLine: { line: number; column?: number } | null;
+  gotoLine: (line: number, column?: number) => void;
+  clearPendingGotoLine: () => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -246,6 +251,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
   clearRevealPath: () => set({ revealPath: null }),
+
+  // Goto line
+  pendingGotoLine: null,
+  gotoLine: (line, column) => set({ pendingGotoLine: { line, column } }),
+  clearPendingGotoLine: () => set({ pendingGotoLine: null }),
 }));
 
 // Helper function to toggle folder expansion

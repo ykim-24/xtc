@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useProjectStore } from '@/stores';
+import { useProjectStore, useTestStore } from '@/stores';
 import { FileIcon } from '@/utils/fileIcons';
 
 // File extension to language mapping
@@ -84,6 +84,32 @@ function fuzzyMatch(query: string, text: string): { match: boolean; score: numbe
   };
 }
 
+// Parse file:line format from query
+// Supports: file.tsx:54, file.tsx:54:46, file.tsx(54,46), file.tsx(54)
+function parseFileLineQuery(query: string): { fileQuery: string; line?: number; column?: number } {
+  // Match parentheses format: file.tsx(54,46) or file.tsx(54)
+  const parenMatch = query.match(/^(.+?)\((\d+)(?:,(\d+))?\)$/);
+  if (parenMatch) {
+    return {
+      fileQuery: parenMatch[1],
+      line: parseInt(parenMatch[2], 10),
+      column: parenMatch[3] ? parseInt(parenMatch[3], 10) : undefined,
+    };
+  }
+
+  // Match colon format: file.tsx:54 or file.tsx:54:46
+  const colonMatch = query.match(/^(.+?):(\d+)(?::(\d+))?$/);
+  if (colonMatch) {
+    return {
+      fileQuery: colonMatch[1],
+      line: parseInt(colonMatch[2], 10),
+      column: colonMatch[3] ? parseInt(colonMatch[3], 10) : undefined,
+    };
+  }
+
+  return { fileQuery: query };
+}
+
 export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -92,7 +118,14 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { openFile, projectPath, revealInExplorer } = useProjectStore();
+  const { openFile, projectPath, revealInExplorer, gotoLine } = useProjectStore();
+  const { mode, setMode } = useTestStore();
+
+  // Parse query for file:line format
+  const { fileQuery, line: targetLine, column: targetColumn } = useMemo(
+    () => parseFileLineQuery(query),
+    [query]
+  );
 
   // Load all files when modal opens
   const loadAllFiles = useCallback(async () => {
@@ -111,16 +144,16 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
     }
   }, [projectPath]);
 
-  // Filter and sort by match score
+  // Filter and sort by match score (use fileQuery to exclude line numbers)
   const filteredFiles = useMemo(() => {
-    if (!query.trim()) {
+    if (!fileQuery.trim()) {
       return allFiles.slice(0, 50); // Show first 50 when no query
     }
 
     return allFiles
       .map(file => {
-        const nameMatch = fuzzyMatch(query, file.name);
-        const pathMatch = fuzzyMatch(query, file.path);
+        const nameMatch = fuzzyMatch(fileQuery, file.name);
+        const pathMatch = fuzzyMatch(fileQuery, file.path);
         return {
           ...file,
           score: Math.max(nameMatch.score * 2, pathMatch.score), // Weight name matches higher
@@ -130,7 +163,7 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
       .filter(f => f.match)
       .sort((a, b) => b.score - a.score)
       .slice(0, 50);
-  }, [allFiles, query]);
+  }, [allFiles, fileQuery]);
 
   // Reset state and load files when opening
   useEffect(() => {
@@ -188,6 +221,14 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
       });
       // Reveal the file in explorer
       revealInExplorer(filePath);
+      // Switch to home mode if not already there (to show the editor)
+      if (mode !== 'home') {
+        setMode('home');
+      }
+      // If line number was specified in query, navigate to it
+      if (targetLine) {
+        gotoLine(targetLine, targetColumn);
+      }
     }
     onClose();
   };
@@ -270,7 +311,7 @@ export function FileSearchModal({ isOpen, onClose }: FileSearchModalProps) {
 
         {/* Footer hint */}
         <div className="px-3 py-1.5 border-t border-border-primary text-[10px] text-text-muted">
-          ↑↓ navigate • ↵ open • esc close
+          ↑↓ navigate • ↵ open • esc close • file:line or file(line,col) to go to line
         </div>
       </div>
     </div>

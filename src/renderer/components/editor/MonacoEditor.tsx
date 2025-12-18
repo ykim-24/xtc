@@ -83,7 +83,7 @@ function updateModelContent(model: monaco.editor.ITextModel, content: string) {
 export function MonacoEditor() {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const currentPathRef = useRef<string | null>(null);
-  const { openFiles, activeFilePath, updateFileContent, projectPath } = useProjectStore();
+  const { openFiles, activeFilePath, updateFileContent, projectPath, pendingGotoLine, clearPendingGotoLine } = useProjectStore();
   const {
     fontSize,
     fontFamily,
@@ -197,6 +197,28 @@ export function MonacoEditor() {
       }
     }
   }, [openFiles]);
+
+  // Handle pending goto line
+  useEffect(() => {
+    if (!pendingGotoLine || !editorRef.current) return;
+
+    const { line, column } = pendingGotoLine;
+
+    // Small delay to ensure the editor has finished loading the file
+    const timer = setTimeout(() => {
+      if (editorRef.current) {
+        // Set cursor position
+        editorRef.current.setPosition({ lineNumber: line, column: column || 1 });
+        // Reveal the line in the center of the editor
+        editorRef.current.revealLineInCenter(line);
+        // Focus the editor
+        editorRef.current.focus();
+      }
+      clearPendingGotoLine();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [pendingGotoLine, clearPendingGotoLine]);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;

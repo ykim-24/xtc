@@ -191,6 +191,7 @@ contextBridge.exposeInMainWorld("electron", {
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke("terminal:resize", id, cols, rows),
     kill: (id: string) => ipcRenderer.invoke("terminal:kill", id),
+    list: () => ipcRenderer.invoke("terminal:list"),
     onData: (callback: (event: { id: string; data: string }) => void) => {
       const handler = (
         _event: Electron.IpcRendererEvent,
